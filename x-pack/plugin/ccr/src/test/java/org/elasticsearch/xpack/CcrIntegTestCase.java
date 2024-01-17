@@ -562,6 +562,12 @@ public abstract class CcrIntegTestCase extends ESTestCase {
                                 builder.field("type", "integer");
                             }
                             builder.endObject();
+                            builder.startObject("m");
+                            {
+                                builder.field("type", "mock_inference_model");
+                                builder.field("model_id", "test_model");
+                            }
+                            builder.endObject();
                         }
                         builder.endObject();
                         if (sourceEnabled == false) {

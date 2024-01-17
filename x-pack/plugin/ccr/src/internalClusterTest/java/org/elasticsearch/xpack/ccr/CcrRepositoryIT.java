@@ -39,9 +39,11 @@ import org.elasticsearch.common.xcontent.support.XContentMapValues;
 import org.elasticsearch.core.Strings;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.Index;
+import org.elasticsearch.index.mapper.MockInferenceModelPlugin;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.index.snapshots.IndexShardSnapshotStatus;
 import org.elasticsearch.index.store.Store;
+import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.repositories.IndexId;
 import org.elasticsearch.repositories.RepositoriesService;
 import org.elasticsearch.repositories.Repository;
@@ -65,11 +67,13 @@ import org.elasticsearch.xpack.core.ccr.action.PutFollowAction;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -92,6 +96,11 @@ import static org.hamcrest.Matchers.notNullValue;
 public class CcrRepositoryIT extends CcrIntegTestCase {
 
     private final IndicesOptions indicesOptions = IndicesOptions.strictSingleIndexNoExpandForbidClosed();
+
+    @Override
+    protected Collection<Class<? extends Plugin>> nodePlugins() {
+        return List.of(MockInferenceModelPlugin.class);
+    }
 
     public void testThatRepositoryIsPutAndRemovedWhenRemoteClusterIsUpdated() throws Exception {
         String leaderClusterRepoName = CcrRepository.NAME_PREFIX + "leader_cluster";
@@ -185,6 +194,7 @@ public class CcrRepositoryIT extends CcrIntegTestCase {
         IndexMetadata leaderMetadata = leaderState.getState().metadata().index(leaderIndex);
         IndexMetadata followerMetadata = followerState.getState().metadata().index(followerIndex);
         assertEquals(leaderMetadata.getNumberOfShards(), followerMetadata.getNumberOfShards());
+        assertEquals(leaderMetadata.getFieldsForModels(), followerMetadata.getFieldsForModels());
         Map<String, String> ccrMetadata = followerMetadata.getCustomData(Ccr.CCR_CUSTOM_METADATA_KEY);
         assertEquals(leaderIndex, ccrMetadata.get(Ccr.CCR_CUSTOM_METADATA_LEADER_INDEX_NAME_KEY));
         assertEquals(leaderMetadata.getIndexUUID(), ccrMetadata.get(Ccr.CCR_CUSTOM_METADATA_LEADER_INDEX_UUID_KEY));
@@ -434,7 +444,17 @@ public class CcrRepositoryIT extends CcrIntegTestCase {
         Runnable updateMappings = () -> {
             if (updateSent.compareAndSet(false, true)) {
                 leaderClient().admin().indices().preparePutMapping(leaderIndex).setSource("""
-                    {"properties":{"k":{"type":"long"}}}""", XContentType.JSON).execute(ActionListener.running(latch::countDown));
+                    {
+                      "properties": {
+                        "k": {
+                          "type":"long"
+                        },
+                        "mock_inference_model_field": {
+                          "type": "mock_inference_model",
+                          "model_id": "test_model"
+                        }
+                      }
+                    }""", XContentType.JSON).execute(ActionListener.running(latch::countDown));
             }
             try {
                 latch.await();
@@ -473,6 +493,17 @@ public class CcrRepositoryIT extends CcrIntegTestCase {
                 .getMappings()
                 .get("index2");
             assertThat(XContentMapValues.extractValue("properties.k.type", mappingMetadata.sourceAsMap()), equalTo("long"));
+
+            ClusterStateResponse followerState = followerClient().admin()
+                .cluster()
+                .prepareState()
+                .clear()
+                .setMetadata(true)
+                .setIndices("index2")
+                .get();
+
+            IndexMetadata followerMetadata = followerState.getState().metadata().index("index2");
+            assertEquals(Map.of("test_model", Set.of("mock_inference_model_field")), followerMetadata.getFieldsForModels());
         } finally {
             for (MockTransportService transportService : transportServices) {
                 transportService.clearAllRules();
