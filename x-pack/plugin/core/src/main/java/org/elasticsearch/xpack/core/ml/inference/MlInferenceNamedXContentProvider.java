@@ -74,7 +74,6 @@ import org.elasticsearch.xpack.core.ml.inference.trainedmodel.TextExpansionConfi
 import org.elasticsearch.xpack.core.ml.inference.trainedmodel.TextSimilarityConfig;
 import org.elasticsearch.xpack.core.ml.inference.trainedmodel.TextSimilarityConfigUpdate;
 import org.elasticsearch.xpack.core.ml.inference.trainedmodel.Tokenization;
-import org.elasticsearch.xpack.core.ml.inference.trainedmodel.TokenizationConfigUpdate;
 import org.elasticsearch.xpack.core.ml.inference.trainedmodel.TokenizationUpdate;
 import org.elasticsearch.xpack.core.ml.inference.trainedmodel.TrainedModel;
 import org.elasticsearch.xpack.core.ml.inference.trainedmodel.TrainedModelLocation;
@@ -816,13 +815,6 @@ public class MlInferenceNamedXContentProvider implements NamedXContentProvider {
                 TokenizationUpdate.class,
                 XLMRobertaTokenizationUpdate.NAME.getPreferredName(),
                 XLMRobertaTokenizationUpdate::new
-            )
-        );
-        namedWriteables.add(
-            new NamedWriteableRegistry.Entry(
-                TokenizationConfigUpdate.class,
-                TokenizationConfigUpdate.NAME,
-                TokenizationConfigUpdate::new
             )
         );
 
