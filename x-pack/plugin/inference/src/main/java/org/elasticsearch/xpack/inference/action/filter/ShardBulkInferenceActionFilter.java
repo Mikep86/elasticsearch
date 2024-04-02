@@ -29,6 +29,7 @@ import org.elasticsearch.common.util.concurrent.AtomicArray;
 import org.elasticsearch.common.xcontent.support.XContentMapValues;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.Releasable;
+import org.elasticsearch.core.Strings;
 import org.elasticsearch.inference.ChunkedInferenceServiceResults;
 import org.elasticsearch.inference.ChunkingOptions;
 import org.elasticsearch.inference.InferenceService;
@@ -283,6 +284,15 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                     try {
                         for (int i = 0; i < requests.size(); i++) {
                             var request = requests.get(i);
+                            logger.error(
+                                Strings.format(
+                                    "Exception when running inference id [%s] on field [%s]",
+                                    inferenceProvider.model.getInferenceEntityId(),
+                                    request.field
+                                ),
+                                exc
+                            );
+
                             inferenceResults.get(request.id).failures.add(
                                 new ElasticsearchException(
                                     "Exception when running inference id [{}] on field [{}]",
