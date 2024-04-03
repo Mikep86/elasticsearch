@@ -65,7 +65,6 @@ import org.elasticsearch.xpack.core.ml.action.StartDataFrameAnalyticsAction;
 import org.elasticsearch.xpack.core.ml.action.StartDatafeedAction;
 import org.elasticsearch.xpack.core.ml.datafeed.DatafeedState;
 import org.elasticsearch.xpack.core.ml.dataframe.DataFrameAnalyticsTaskState;
-import org.elasticsearch.xpack.core.ml.inference.trainedmodel.TokenizationConfigUpdate;
 import org.elasticsearch.xpack.core.ml.job.config.JobTaskState;
 import org.elasticsearch.xpack.core.ml.job.snapshot.upgrade.SnapshotUpgradeTaskParams;
 import org.elasticsearch.xpack.core.ml.job.snapshot.upgrade.SnapshotUpgradeTaskState;
@@ -284,8 +283,7 @@ public class XPackClientPlugin extends Plugin implements ActionPlugin, NetworkPl
                 XPackField.ENTERPRISE_SEARCH,
                 EnterpriseSearchFeatureSetUsage::new
             ),
-            new NamedWriteableRegistry.Entry(XPackFeatureSet.Usage.class, XPackField.UNIVERSAL_PROFILING, ProfilingUsage::new),
-            new NamedWriteableRegistry.Entry(TokenizationConfigUpdate.class, TokenizationConfigUpdate.NAME, TokenizationConfigUpdate::new)
+            new NamedWriteableRegistry.Entry(XPackFeatureSet.Usage.class, XPackField.UNIVERSAL_PROFILING, ProfilingUsage::new)
         ).filter(Objects::nonNull).toList();
     }
 
