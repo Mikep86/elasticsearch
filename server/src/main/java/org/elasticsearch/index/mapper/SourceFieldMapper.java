@@ -36,6 +36,8 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 
 import static org.elasticsearch.indices.recovery.RecoverySettings.INDICES_RECOVERY_SOURCE_ENABLED_SETTING;
 
@@ -417,7 +419,8 @@ public class SourceFieldMapper extends MetadataFieldMapper {
     public void preParse(DocumentParserContext context) throws IOException {
         BytesReference originalSource = context.sourceToParse().source();
         XContentType contentType = context.sourceToParse().getXContentType();
-        final BytesReference adaptedSource = applyFilters(originalSource, contentType);
+        final BytesReference transformedSource = transformInferenceFields(originalSource, contentType, context.mappingLookup());
+        final BytesReference adaptedSource = applyFilters(transformedSource, contentType);
 
         if (adaptedSource != null) {
             assert context.indexSettings().getIndexVersionCreated().before(IndexVersions.V_8_7_0)
@@ -446,6 +449,41 @@ public class SourceFieldMapper extends MetadataFieldMapper {
         } else {
             return originalSource;
         }
+    }
+
+    @Nullable
+    private BytesReference transformInferenceFields(
+        @Nullable BytesReference originalSource,
+        @Nullable XContentType contentType,
+        MappingLookup mappingLookup
+    ) {
+        if (stored() == false) {
+            return null;
+        }
+
+        BytesReference transformedSource = originalSource;
+        Set<String> inferenceFields = mappingLookup.inferenceFields().keySet();
+        if (originalSource != null && inferenceFields.isEmpty() == false) {
+            Source source = Source.fromBytes(originalSource, contentType);
+            Map<String, Object> sourceAsMap = source.source();
+            for (String fieldName : inferenceFields) {
+                if (sourceAsMap.containsKey(fieldName) == false) {
+                    continue;
+                }
+
+                Mapper mapper = mappingLookup.getMapper(fieldName);
+                if (mapper instanceof InferenceFieldMapper == false) {
+                    throw new IllegalStateException("[" + fieldName + "] is not an inference field");
+                }
+
+                InferenceFieldMapper inferenceFieldMapper = (InferenceFieldMapper) mapper;
+                sourceAsMap.put(fieldName, inferenceFieldMapper.getOriginalValue(sourceAsMap));
+            }
+
+            transformedSource = Source.fromMap(sourceAsMap, contentType).internalSourceRef();
+        }
+
+        return transformedSource;
     }
 
     @Override
