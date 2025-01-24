@@ -1003,3 +1003,27 @@ setup:
   - length: { aggregations.agg_ids.buckets: 1 }
   - match: { aggregations.agg_ids.buckets.0.key: "doc_1" }
   - match: { aggregations.agg_ids.buckets.0.doc_count: 1 }
+
+---
+"Field caps index filters can use the semantic query":
+  - do:
+      indices.create:
+        index: field-caps-index
+        body:
+          mappings:
+            properties:
+              inference_field:
+                type: semantic_text
+                inference_id: sparse-inference-id
+
+  - do:
+      field_caps:
+        index: test-sparse-index
+        include_empty_fields: true
+        fields: "*"
+        body:
+          index_filter:
+            semantic:
+              field: inference_field
+              query: "a test query"
+
