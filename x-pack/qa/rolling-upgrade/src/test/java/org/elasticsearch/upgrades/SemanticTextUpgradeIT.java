@@ -66,7 +66,7 @@ public class SemanticTextUpgradeIT extends AbstractUpgradeTestCase {
     private static final String INDEX_BASE_NAME = "semantic_text_test_index";
     private static final String SEMANTIC_TEXT_FIELD = "semantic_field";
 
-    private static Model SPARSE_MODEL;
+    private static Model sparseModel;
     private static MapperService legacyFormatMapperService;
     private static MapperService newFormatMapperService;
 
@@ -74,7 +74,7 @@ public class SemanticTextUpgradeIT extends AbstractUpgradeTestCase {
 
     @BeforeClass
     public static void beforeClass() throws Exception {
-        SPARSE_MODEL = TestModel.createRandomInstance(TaskType.SPARSE_EMBEDDING);
+        sparseModel = TestModel.createRandomInstance(TaskType.SPARSE_EMBEDDING);
         legacyFormatMapperService = crateMapperService(true);
         newFormatMapperService = crateMapperService(false);
     }
@@ -93,7 +93,7 @@ public class SemanticTextUpgradeIT extends AbstractUpgradeTestCase {
                 }
               }
             }
-            """, SEMANTIC_TEXT_FIELD, SPARSE_MODEL.getInferenceEntityId());
+            """, SEMANTIC_TEXT_FIELD, sparseModel.getInferenceEntityId());
     }
 
     private static MapperService crateMapperService(boolean useLegacyFormat) throws IOException {
@@ -179,7 +179,7 @@ public class SemanticTextUpgradeIT extends AbstractUpgradeTestCase {
         final SemanticTextField semanticTextField = randomSemanticText(
             useLegacyFormat,
             SEMANTIC_TEXT_FIELD,
-            SPARSE_MODEL,
+            sparseModel,
             null,
             semanticTextFieldValue,
             XContentType.JSON
