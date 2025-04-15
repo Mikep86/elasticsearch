@@ -11,10 +11,14 @@ import com.carrotsearch.randomizedtesting.annotations.ParametersFactory;
 
 import org.apache.lucene.search.join.ScoreMode;
 import org.elasticsearch.TransportVersion;
+import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.action.ActionRequest;
+import org.elasticsearch.action.ActionType;
 import org.elasticsearch.action.admin.indices.create.CreateIndexResponse;
 import org.elasticsearch.client.Request;
 import org.elasticsearch.client.RequestOptions;
 import org.elasticsearch.client.Response;
+import org.elasticsearch.client.internal.Client;
 import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesReference;
@@ -42,6 +46,8 @@ import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentFactory;
 import org.elasticsearch.xcontent.XContentParserConfiguration;
 import org.elasticsearch.xcontent.XContentType;
+import org.elasticsearch.xpack.core.inference.action.InferenceAction;
+import org.elasticsearch.xpack.core.inference.results.SparseEmbeddingResults;
 import org.elasticsearch.xpack.core.ml.search.SparseVectorQueryBuilder;
 import org.elasticsearch.xpack.core.ml.search.WeightedToken;
 import org.elasticsearch.xpack.inference.InferencePlugin;
@@ -50,6 +56,7 @@ import org.elasticsearch.xpack.inference.model.TestModel;
 import org.junit.BeforeClass;
 
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
@@ -278,5 +285,35 @@ public class SemanticTextUpgradeIT extends AbstractUpgradeTestCase {
         }
 
         assertThat(docIds, equalTo(Set.of("doc_1", "doc_2")));
+    }
+
+    private static class MockInferenceResultQueryRewriter extends AbstractQueryRewriter {
+        @Override
+        public boolean canSimulateMethod(Method method, Object[] args) throws NoSuchMethodException {
+            return method.equals(Client.class.getMethod("execute", ActionType.class, ActionRequest.class, ActionListener.class))
+                && (args[0] instanceof InferenceAction);
+        }
+
+        @Override
+        public Object simulateMethod(Method method, Object[] args) {
+            InferenceAction.Request request = (InferenceAction.Request) args[1];
+            List<String> input = request.getInput();
+            String query = input.get(0);
+
+            InferenceAction.Response response = generateSparseEmbeddingInferenceResponse(query);
+
+            @SuppressWarnings("unchecked")  // We matched the method above.
+            ActionListener<InferenceAction.Response> listener = (ActionListener<InferenceAction.Response>) args[2];
+            listener.onResponse(response);
+
+            return null;
+        }
+
+        private InferenceAction.Response generateSparseEmbeddingInferenceResponse(String query) {
+            List<WeightedToken> weightedTokens = Arrays.stream(query.split("\\s+")).map(s -> new WeightedToken(s, 1.0f)).toList();
+            return new InferenceAction.Response(
+                new SparseEmbeddingResults(List.of(SparseEmbeddingResults.Embedding.create(weightedTokens, false)))
+            );
+        }
     }
 }
