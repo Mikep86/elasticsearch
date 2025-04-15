@@ -12,14 +12,10 @@ import org.elasticsearch.action.OriginalIndices;
 import org.elasticsearch.action.ResolvedIndices;
 import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.client.internal.Client;
-import org.elasticsearch.cluster.metadata.IndexMetadata;
-import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.index.IndexSettings;
-import org.elasticsearch.index.IndexVersion;
 import org.elasticsearch.index.mapper.MapperService;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.QueryRewriteContext;
-import org.elasticsearch.test.IndexSettingsModule;
 import org.elasticsearch.xcontent.XContentParserConfiguration;
 
 import java.io.IOException;
@@ -29,19 +25,16 @@ import java.lang.reflect.Proxy;
 import java.util.Map;
 
 public abstract class AbstractQueryRewriter {
-    private final MapperService mapperService;
-    private final ClientInvocationHandler invocationHandler;
     private final Client client;
 
-    public AbstractQueryRewriter(MapperService mapperService) {
-        this.mapperService = mapperService;
-        this.invocationHandler = new ClientInvocationHandler();
+    public AbstractQueryRewriter() {
+        InvocationHandler invocationHandler = new ClientInvocationHandler();
         this.client = (Client) Proxy.newProxyInstance(Class.class.getClassLoader(), new Class<?>[] { Client.class }, invocationHandler);
     }
 
-    public QueryBuilder rewrite(QueryBuilder queryBuilder, String indexName) throws IOException {
+    public QueryBuilder rewrite(QueryBuilder queryBuilder, MapperService mapperService) throws IOException {
         // TODO: rewrite with search execution context as well
-        QueryRewriteContext queryRewriteContext = createQueryRewriteContext(indexName);
+        QueryRewriteContext queryRewriteContext = createQueryRewriteContext(mapperService.getIndexSettings());
         return queryBuilder.rewrite(queryRewriteContext);
     }
 
@@ -49,8 +42,7 @@ public abstract class AbstractQueryRewriter {
 
     public abstract Object simulateMethod(Method method, Object[] args);
 
-    private QueryRewriteContext createQueryRewriteContext(String indexName) {
-        IndexSettings indexSettings = createIndexSettings(indexName);
+    private QueryRewriteContext createQueryRewriteContext(IndexSettings indexSettings) {
         ResolvedIndices resolvedIndices = createMockResolvedIndices(indexSettings);
         return new QueryRewriteContext(
             XContentParserConfiguration.EMPTY,
@@ -61,21 +53,6 @@ public abstract class AbstractQueryRewriter {
             null,
             false
         );
-    }
-
-    private IndexSettings createIndexSettings(String indexName) {
-        IndexMetadata indexMetadata = IndexMetadata.builder(indexName)
-            .settings(
-                Settings.builder()
-                    .put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current())
-                    .put(IndexMetadata.SETTING_INDEX_UUID, indexName)
-            )
-            .numberOfShards(1)
-            .numberOfReplicas(0)
-            .putInferenceFields(mapperService.mappingLookup().inferenceFields())
-            .build();
-
-        return IndexSettingsModule.newIndexSettings(indexMetadata);
     }
 
     private ResolvedIndices createMockResolvedIndices(IndexSettings indexSettings) {
