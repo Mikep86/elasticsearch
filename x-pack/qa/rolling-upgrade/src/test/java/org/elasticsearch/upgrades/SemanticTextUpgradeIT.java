@@ -10,28 +10,53 @@ package org.elasticsearch.upgrades;
 import com.carrotsearch.randomizedtesting.annotations.ParametersFactory;
 
 import org.apache.lucene.search.join.ScoreMode;
+import org.elasticsearch.TransportVersion;
+import org.elasticsearch.action.ActionListener;
+import org.elasticsearch.action.ActionRequest;
+import org.elasticsearch.action.ActionType;
 import org.elasticsearch.action.admin.indices.create.CreateIndexResponse;
 import org.elasticsearch.client.Request;
 import org.elasticsearch.client.RequestOptions;
 import org.elasticsearch.client.Response;
+import org.elasticsearch.client.internal.Client;
+import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.common.Strings;
+import org.elasticsearch.common.bytes.BytesReference;
+import org.elasticsearch.common.compress.CompressedXContent;
+import org.elasticsearch.common.lucene.Lucene;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.index.IndexSettings;
+import org.elasticsearch.index.IndexVersion;
+import org.elasticsearch.index.cache.bitset.BitsetFilterCache;
 import org.elasticsearch.index.mapper.InferenceMetadataFieldsMapper;
+import org.elasticsearch.index.mapper.MapperMetrics;
+import org.elasticsearch.index.mapper.MapperRegistry;
+import org.elasticsearch.index.mapper.MapperService;
+import org.elasticsearch.index.mapper.ParsedDocument;
+import org.elasticsearch.index.mapper.SourceToParse;
 import org.elasticsearch.index.query.NestedQueryBuilder;
+import org.elasticsearch.index.similarity.SimilarityService;
+import org.elasticsearch.indices.IndicesModule;
 import org.elasticsearch.inference.Model;
 import org.elasticsearch.inference.TaskType;
 import org.elasticsearch.search.fetch.subphase.highlight.HighlightBuilder;
+import org.elasticsearch.test.IndexSettingsModule;
 import org.elasticsearch.test.rest.ObjectPath;
 import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentFactory;
+import org.elasticsearch.xcontent.XContentParserConfiguration;
 import org.elasticsearch.xcontent.XContentType;
+import org.elasticsearch.xpack.core.inference.action.InferenceAction;
+import org.elasticsearch.xpack.core.inference.results.SparseEmbeddingResults;
 import org.elasticsearch.xpack.core.ml.search.SparseVectorQueryBuilder;
 import org.elasticsearch.xpack.core.ml.search.WeightedToken;
+import org.elasticsearch.xpack.inference.InferencePlugin;
 import org.elasticsearch.xpack.inference.mapper.SemanticTextField;
 import org.elasticsearch.xpack.inference.model.TestModel;
 import org.junit.BeforeClass;
 
 import java.io.IOException;
+import java.lang.reflect.Method;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
@@ -48,13 +73,69 @@ public class SemanticTextUpgradeIT extends AbstractUpgradeTestCase {
     private static final String INDEX_BASE_NAME = "semantic_text_test_index";
     private static final String SEMANTIC_TEXT_FIELD = "semantic_field";
 
-    private static Model SPARSE_MODEL;
+    private static Model sparseModel;
+    private static MapperService legacyFormatMapperService;
+    private static MapperService newFormatMapperService;
 
     private final boolean useLegacyFormat;
 
     @BeforeClass
-    public static void beforeClass() {
-        SPARSE_MODEL = TestModel.createRandomInstance(TaskType.SPARSE_EMBEDDING);
+    public static void beforeClass() throws Exception {
+        sparseModel = TestModel.createRandomInstance(TaskType.SPARSE_EMBEDDING);
+        legacyFormatMapperService = crateMapperService(true);
+        newFormatMapperService = crateMapperService(false);
+    }
+
+    private static String getIndexName(boolean useLegacyFormat) {
+        return INDEX_BASE_NAME + (useLegacyFormat ? "_legacy" : "_new");
+    }
+
+    private static String getMapping() {
+        return Strings.format("""
+            {
+              "properties": {
+                "%s": {
+                  "type": "semantic_text",
+                  "inference_id": "%s"
+                }
+              }
+            }
+            """, SEMANTIC_TEXT_FIELD, sparseModel.getInferenceEntityId());
+    }
+
+    private static MapperService crateMapperService(boolean useLegacyFormat) throws IOException {
+        String indexName = getIndexName(useLegacyFormat);
+        IndexMetadata indexMetadata = IndexMetadata.builder(indexName)
+            .settings(
+                Settings.builder()
+                    .put(IndexMetadata.SETTING_VERSION_CREATED, IndexVersion.current())
+                    .put(IndexMetadata.SETTING_INDEX_UUID, indexName)
+                    .put(InferenceMetadataFieldsMapper.USE_LEGACY_SEMANTIC_TEXT_FORMAT.getKey(), useLegacyFormat)
+            )
+            .numberOfShards(1)
+            .numberOfReplicas(0)
+            .build();
+        IndexSettings indexSettings = IndexSettingsModule.newIndexSettings(indexMetadata);
+        SimilarityService similarityService = new SimilarityService(indexSettings, null, Map.of());
+        MapperRegistry mapperRegistry = new IndicesModule(List.of(new InferencePlugin(Settings.EMPTY))).getMapperRegistry();
+        BitsetFilterCache bitsetFilterCache = new BitsetFilterCache(indexSettings, BitsetFilterCache.Listener.NOOP);
+
+        MapperService mapperService = new MapperService(
+            TransportVersion::current,
+            indexSettings,
+            (type, name) -> Lucene.STANDARD_ANALYZER,
+            XContentParserConfiguration.EMPTY,
+            similarityService,
+            mapperRegistry,
+            () -> null,
+            indexSettings.getMode().idFieldMapperWithoutFieldData(),
+            null,
+            bitsetFilterCache::getBitSetProducer,
+            MapperMetrics.NOOP
+        );
+        mapperService.merge("_doc", new CompressedXContent(getMapping()), MapperService.MergeReason.MAPPING_UPDATE);
+
+        return mapperService;
     }
 
     public SemanticTextUpgradeIT(boolean useLegacyFormat) {
@@ -76,21 +157,10 @@ public class SemanticTextUpgradeIT extends AbstractUpgradeTestCase {
 
     private void createAndPopulateIndex() throws IOException {
         final String indexName = getIndexName();
-        final String mapping = Strings.format("""
-            {
-              "properties": {
-                "%s": {
-                  "type": "semantic_text",
-                  "inference_id": "%s"
-                }
-              }
-            }
-            """, SEMANTIC_TEXT_FIELD, SPARSE_MODEL.getInferenceEntityId());
-
         CreateIndexResponse response = createIndex(
             indexName,
             Settings.builder().put(InferenceMetadataFieldsMapper.USE_LEGACY_SEMANTIC_TEXT_FORMAT.getKey(), useLegacyFormat).build(),
-            mapping
+            getMapping()
         );
         assertThat(response.isAcknowledged(), equalTo(true));
 
@@ -104,7 +174,11 @@ public class SemanticTextUpgradeIT extends AbstractUpgradeTestCase {
     }
 
     private String getIndexName() {
-        return INDEX_BASE_NAME + (useLegacyFormat ? "_legacy" : "_new");
+        return getIndexName(useLegacyFormat);
+    }
+
+    private MapperService getMapperService() {
+        return useLegacyFormat ? legacyFormatMapperService : newFormatMapperService;
     }
 
     private void indexDoc(String id, List<String> semanticTextFieldValue) throws IOException {
@@ -112,7 +186,7 @@ public class SemanticTextUpgradeIT extends AbstractUpgradeTestCase {
         final SemanticTextField semanticTextField = randomSemanticText(
             useLegacyFormat,
             SEMANTIC_TEXT_FIELD,
-            SPARSE_MODEL,
+            sparseModel,
             null,
             semanticTextFieldValue,
             XContentType.JSON
@@ -125,6 +199,15 @@ public class SemanticTextUpgradeIT extends AbstractUpgradeTestCase {
         }
         addSemanticTextInferenceResults(useLegacyFormat, builder, List.of(semanticTextField));
         builder.endObject();
+
+        MapperService mapperService = getMapperService();
+        SourceToParse sourceToParse = new SourceToParse(id, BytesReference.bytes(builder), XContentType.JSON);
+        ParsedDocument parsedDocument = mapperService.documentMapper().parse(sourceToParse);
+        mapperService.merge(
+            "_doc",
+            parsedDocument.dynamicMappingsUpdate().toCompressedXContent(),
+            MapperService.MergeReason.MAPPING_UPDATE
+        );
 
         RequestOptions requestOptions = RequestOptions.DEFAULT.toBuilder().addParameter("refresh", "true").build();
         Request request = new Request("POST", indexName + "/_doc/" + id);
@@ -202,5 +285,35 @@ public class SemanticTextUpgradeIT extends AbstractUpgradeTestCase {
         }
 
         assertThat(docIds, equalTo(Set.of("doc_1", "doc_2")));
+    }
+
+    private static class MockInferenceResultQueryRewriter extends AbstractQueryRewriter {
+        @Override
+        public boolean canSimulateMethod(Method method, Object[] args) throws NoSuchMethodException {
+            return method.equals(Client.class.getMethod("execute", ActionType.class, ActionRequest.class, ActionListener.class))
+                && (args[0] instanceof InferenceAction);
+        }
+
+        @Override
+        public Object simulateMethod(Method method, Object[] args) {
+            InferenceAction.Request request = (InferenceAction.Request) args[1];
+            List<String> input = request.getInput();
+            String query = input.get(0);
+
+            InferenceAction.Response response = generateSparseEmbeddingInferenceResponse(query);
+
+            @SuppressWarnings("unchecked")  // We matched the method above.
+            ActionListener<InferenceAction.Response> listener = (ActionListener<InferenceAction.Response>) args[2];
+            listener.onResponse(response);
+
+            return null;
+        }
+
+        private InferenceAction.Response generateSparseEmbeddingInferenceResponse(String query) {
+            List<WeightedToken> weightedTokens = Arrays.stream(query.split("\\s+")).map(s -> new WeightedToken(s, 1.0f)).toList();
+            return new InferenceAction.Response(
+                new SparseEmbeddingResults(List.of(SparseEmbeddingResults.Embedding.create(weightedTokens, false)))
+            );
+        }
     }
 }
