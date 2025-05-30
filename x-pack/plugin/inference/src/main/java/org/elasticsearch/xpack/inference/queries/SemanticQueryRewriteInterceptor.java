@@ -41,6 +41,10 @@ public abstract class SemanticQueryRewriteInterceptor implements QueryRewriteInt
             return queryBuilder;
         }
 
+        // TODO: If there is more than one field:
+        // - Build a top-level boolean query, set minimum should match to 1
+        // - Loop over every field, add each generated query as a should clause to the top-level query
+        // - Integrate per-field boost into query generation
         InferenceIndexInformationForField indexInformation = resolveIndicesForField(fieldName, resolvedIndices);
         if (indexInformation.getInferenceIndices().isEmpty()) {
             // No inference fields were identified, so return the original query.
@@ -61,7 +65,7 @@ public abstract class SemanticQueryRewriteInterceptor implements QueryRewriteInt
      * @param queryBuilder {@link QueryBuilder}
      * @return The singular field name requested by the provided query builder.
      */
-    protected abstract String getFieldName(QueryBuilder queryBuilder);
+    protected abstract String getFieldName(QueryBuilder queryBuilder);  // TODO: Change to return Map<String, Float>
 
     /**
      * @param queryBuilder {@link QueryBuilder}
