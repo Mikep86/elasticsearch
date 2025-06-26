@@ -752,17 +752,6 @@ public final class MultiMatchQueryBuilder extends AbstractQueryBuilder<MultiMatc
     }
 
     @Override
-    protected QueryBuilder doRewrite(QueryRewriteContext queryRewriteContext) throws IOException {
-        ResolvedIndices resolvedIndices = queryRewriteContext.getResolvedIndices();
-        if (resolvedIndices != null) {
-            // Rewriting on the coordinator node
-            // TODO: Handle semantic text fields here
-        }
-
-        return this;
-    }
-
-    @Override
     protected Query doToQuery(SearchExecutionContext context) throws IOException {
         MultiMatchQueryParser multiMatchQuery = new MultiMatchQueryParser(context);
         if (analyzer != null) {
