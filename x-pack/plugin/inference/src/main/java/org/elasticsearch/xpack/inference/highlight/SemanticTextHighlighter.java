@@ -33,8 +33,10 @@ import org.elasticsearch.search.fetch.subphase.highlight.HighlightField;
 import org.elasticsearch.search.fetch.subphase.highlight.HighlightUtils;
 import org.elasticsearch.search.fetch.subphase.highlight.Highlighter;
 import org.elasticsearch.search.vectors.DenseVectorQuery;
+import org.elasticsearch.search.vectors.RescoreKnnVectorQuery;
 import org.elasticsearch.search.vectors.SparseVectorQueryWrapper;
 import org.elasticsearch.search.vectors.VectorData;
+import org.elasticsearch.search.vectors.VectorSimilarityQuery;
 import org.elasticsearch.xcontent.Text;
 import org.elasticsearch.xpack.inference.mapper.OffsetSourceField;
 import org.elasticsearch.xpack.inference.mapper.OffsetSourceFieldMapper;
@@ -276,6 +278,9 @@ public class SemanticTextHighlighter implements Highlighter {
                     queries.add(new MatchAllDocsQuery());
                 } else if (query instanceof DenseVectorQuery.Floats floatsQuery) {
                     queries.add(fieldType.createExactKnnQuery(VectorData.fromFloats(floatsQuery.getQuery()), null));
+                } else if (query instanceof VectorSimilarityQuery vectorSimilarityQuery) {
+                    VectorData vectorData = extractVectorData(vectorSimilarityQuery);
+                    queries.add(fieldType.createExactKnnQuery(vectorData, vectorSimilarityQuery.getSimilarity()));
                 }
             }
         });
@@ -311,5 +316,24 @@ public class SemanticTextHighlighter implements Highlighter {
             }
         });
         return queries;
+    }
+
+    private static VectorData extractVectorData(VectorSimilarityQuery vectorSimilarityQuery) {
+        Query innerKnnQuery = vectorSimilarityQuery.getInnerKnnQuery();
+        return switch (innerKnnQuery) {
+            case KnnFloatVectorQuery knnQuery -> VectorData.fromFloats(knnQuery.getTargetCopy());
+            case KnnByteVectorQuery knnQuery -> VectorData.fromBytes(knnQuery.getTargetCopy());
+            case RescoreKnnVectorQuery rescoreKnnQuery -> extractVectorData(rescoreKnnQuery);
+            default -> throw new IllegalStateException("Unhandled inner kNN query type [" + innerKnnQuery.getClass() + "]");
+        };
+    }
+
+    private static VectorData extractVectorData(RescoreKnnVectorQuery rescoreKnnVectorQuery) {
+        Query innerQuery = rescoreKnnVectorQuery.innerQuery();
+        return switch (innerQuery) {
+            case KnnFloatVectorQuery knnQuery -> VectorData.fromFloats(knnQuery.getTargetCopy());
+            case KnnByteVectorQuery knnQuery -> VectorData.fromBytes(knnQuery.getTargetCopy());
+            default -> throw new IllegalStateException("Unhandled inner query type [" + innerQuery.getClass() + "]");
+        };
     }
 }

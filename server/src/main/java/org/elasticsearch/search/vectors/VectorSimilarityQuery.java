@@ -49,11 +49,11 @@ public class VectorSimilarityQuery extends Query implements QueryProfilerProvide
     }
 
     // For testing
-    Query getInnerKnnQuery() {
+    public Query getInnerKnnQuery() {
         return innerKnnQuery;
     }
 
-    float getSimilarity() {
+    public float getSimilarity() {
         return similarity;
     }
 
