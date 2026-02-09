@@ -82,6 +82,10 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
         QueryVectorBuilder queryVectorBuilder = originalQuery.queryVectorBuilder();
         if (queryVectorBuilder instanceof TextEmbeddingQueryVectorBuilder textEmbeddingQueryVectorBuilder) {
             query = textEmbeddingQueryVectorBuilder.getModelText();
+        } else if (queryVectorBuilder != null) {
+            // The validate call should generate an exception. Call it to report back to the user why the query vector builder is invalid.
+            queryVectorBuilder.validate();
+            throw new IllegalStateException("Expected validate call to throw an exception");
         }
 
         return query;
