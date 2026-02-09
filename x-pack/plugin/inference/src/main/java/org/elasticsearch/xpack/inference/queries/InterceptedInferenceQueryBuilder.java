@@ -155,7 +155,7 @@ public abstract class InterceptedInferenceQueryBuilder<T extends AbstractQueryBu
      * @param interceptedCcsRequest       Flag indicating if this is a CCS request
      * @return A copy of {@code this} with the provided inference results map
      */
-    protected abstract QueryBuilder copy(
+    protected abstract InterceptedInferenceQueryBuilder<T> copy(
         Map<FullyQualifiedInferenceId, InferenceResults> inferenceResultsMap,
         PlainActionFuture<InferenceQueryUtils.InferenceInfo> inferenceInfoFuture,
         boolean interceptedCcsRequest
