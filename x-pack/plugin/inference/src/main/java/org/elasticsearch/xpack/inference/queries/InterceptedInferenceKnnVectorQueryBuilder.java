@@ -132,7 +132,11 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
         }
         if (filtersChanged) {
             originalQuery.setFilterQueries(rewrittenFilters);
-            return queryBuilder.copy(queryBuilder.inferenceResultsMap, queryBuilder.inferenceInfoFuture, queryBuilder.interceptedCcsRequest);
+            return queryBuilder.copy(
+                queryBuilder.inferenceResultsMap,
+                queryBuilder.inferenceInfoFuture,
+                queryBuilder.interceptedCcsRequest
+            );
         }
         return queryBuilder;
     }

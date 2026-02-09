@@ -20,7 +20,7 @@ import java.util.Objects;
 import static org.elasticsearch.common.Strings.format;
 import static org.elasticsearch.search.vectors.KnnVectorQueryBuilder.QUERY_VECTOR_BUILDER_FIELD;
 
-public final class QueryVectorBuilderAsyncAction extends QueryRewriteAsyncAction<float[], QueryVectorBuilderAsyncAction>  {
+public final class QueryVectorBuilderAsyncAction extends QueryRewriteAsyncAction<float[], QueryVectorBuilderAsyncAction> {
     private final QueryVectorBuilder queryVectorBuilder;
 
     public QueryVectorBuilderAsyncAction(QueryVectorBuilder queryVectorBuilder) {
@@ -42,7 +42,11 @@ public final class QueryVectorBuilderAsyncAction extends QueryRewriteAsyncAction
         return Objects.equals(queryVectorBuilder, other.queryVectorBuilder);
     }
 
-    public static void registerAction(QueryRewriteContext queryRewriteContext, QueryVectorBuilder queryVectorBuilder, SetOnce<float[]> supplier) {
+    public static void registerAction(
+        QueryRewriteContext queryRewriteContext,
+        QueryVectorBuilder queryVectorBuilder,
+        SetOnce<float[]> supplier
+    ) {
         queryRewriteContext.registerUniqueAsyncAction(new QueryVectorBuilderAsyncAction(queryVectorBuilder), v -> {
             supplier.set(v);
             if (v == null) {
