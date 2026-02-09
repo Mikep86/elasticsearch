@@ -185,6 +185,7 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
             // Complete & valid query vector builders are always rewritten on the local cluster coordinator node, prior to getting inference
             // results for inference fields. Thus, we can assume that the inference results map is null, and it is safe to use this
             // constructor.
+            assert queryBuilder.inferenceResultsMap == null;
             rewritten = new InterceptedInferenceKnnVectorQueryBuilder(rewrittenOriginalQuery);
         }
 
@@ -246,6 +247,7 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
             }
 
             if (inferenceResults instanceof MlDenseEmbeddingResults mlDenseEmbeddingResults) {
+                // TODO: Did we forget to propagate autoPrefilteringEnabled here?
                 rewritten = new KnnVectorQueryBuilder(
                     originalQuery.getFieldName(),
                     mlDenseEmbeddingResults.getInferenceAsFloat(),

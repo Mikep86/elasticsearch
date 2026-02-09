@@ -8,6 +8,7 @@
 package org.elasticsearch.xpack.inference.queries;
 
 import org.apache.lucene.search.join.ScoreMode;
+import org.apache.lucene.util.SetOnce;
 import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.ResolvedIndices;
 import org.elasticsearch.action.support.PlainActionFuture;
@@ -25,6 +26,7 @@ import org.elasticsearch.inference.TaskType;
 import org.elasticsearch.inference.WeightedToken;
 import org.elasticsearch.plugins.internal.rewriter.QueryRewriteInterceptor;
 import org.elasticsearch.xpack.core.ml.inference.results.TextExpansionResults;
+import org.elasticsearch.xpack.core.ml.search.SparseInferenceRewriteAction;
 import org.elasticsearch.xpack.core.ml.search.SparseVectorQueryBuilder;
 import org.elasticsearch.xpack.inference.mapper.SemanticTextField;
 import org.elasticsearch.xpack.inference.mapper.SemanticTextFieldMapper;
@@ -87,6 +89,40 @@ public class InterceptedInferenceSparseVectorQueryBuilder extends InterceptedInf
         }
 
         return override;
+    }
+
+    @Override
+    protected InterceptedInferenceQueryBuilder<SparseVectorQueryBuilder> customDoRewriteWaitForInferenceResults(
+        QueryRewriteContext queryRewriteContext
+    ) {
+        return getQueryVector(this, queryRewriteContext);
+    }
+
+    private static InterceptedInferenceQueryBuilder<SparseVectorQueryBuilder> getQueryVector(
+        InterceptedInferenceQueryBuilder<SparseVectorQueryBuilder> queryBuilder,
+        QueryRewriteContext queryRewriteContext
+    ) {
+        SparseVectorQueryBuilder originalQuery = queryBuilder.originalQuery;
+        String inferenceId = originalQuery.getInferenceId();
+        String query = originalQuery.getQuery();
+
+        InterceptedInferenceQueryBuilder<SparseVectorQueryBuilder> rewritten = queryBuilder;
+        if (inferenceId != null && query != null) {
+            SetOnce<TextExpansionResults> textExpansionResultsSupplier = new SetOnce<>();
+            queryRewriteContext.registerUniqueAsyncAction(
+                new SparseInferenceRewriteAction(inferenceId, query),
+                textExpansionResultsSupplier::set
+            );
+            SparseVectorQueryBuilder rewrittenOriginalQuery = new SparseVectorQueryBuilder(originalQuery, textExpansionResultsSupplier);
+
+            // Explicitly provided inference IDs are always evaluated on the local cluster coordinator node, prior to getting inference
+            // results for inference fields. Thus, we can assume that the inference results map is null, and it is safe to use this
+            // constructor.
+            assert queryBuilder.inferenceResultsMap == null;
+            rewritten = new InterceptedInferenceSparseVectorQueryBuilder(rewrittenOriginalQuery);
+        }
+
+        return rewritten;
     }
 
     @Override

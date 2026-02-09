@@ -327,6 +327,9 @@ public abstract class InterceptedInferenceQueryBuilder<T extends AbstractQueryBu
 
     private QueryBuilder doRewriteWaitForInferenceResults(QueryRewriteContext queryRewriteContext, boolean alwaysSkipRemotes) {
         ResolvedIndices resolvedIndices = queryRewriteContext.getResolvedIndices();
+
+        // TODO: If getQuery() == null, rewrite the original query. Need to worry about the original query being re-intercepted?
+
         if (inferenceInfoFuture != null) {
             InferenceQueryUtils.InferenceInfo inferenceInfo = getResultFromFuture(inferenceInfoFuture);
             if (inferenceInfo == null) {
