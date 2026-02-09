@@ -32,4 +32,5 @@ public interface QueryVectorBuilder extends VersionedNamedWriteable, ToXContentO
      */
     void buildVector(Client client, ActionListener<float[]> listener);
 
+    void validate();
 }

@@ -847,6 +847,9 @@ public class LinearRetrieverIT extends ESIntegTestCase {
             }
 
             @Override
+            public void validate() {}
+
+            @Override
             public String getWriteableName() {
                 throw new IllegalStateException("Should not be called");
             }

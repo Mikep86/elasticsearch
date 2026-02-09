@@ -48,7 +48,7 @@ public class TestQueryVectorBuilderPlugin implements SearchPlugin {
         private final List<Float> vectorToBuild;
 
         public TestQueryVectorBuilder(List<Float> vectorToBuild) {
-            this.vectorToBuild = vectorToBuild;
+            this.vectorToBuild = Objects.requireNonNull(vectorToBuild);
         }
 
         public TestQueryVectorBuilder(float[] expected) {
@@ -91,6 +91,9 @@ public class TestQueryVectorBuilderPlugin implements SearchPlugin {
             }
             listener.onResponse(response);
         }
+
+        @Override
+        public void validate() {}
 
         @Override
         public boolean equals(Object o) {

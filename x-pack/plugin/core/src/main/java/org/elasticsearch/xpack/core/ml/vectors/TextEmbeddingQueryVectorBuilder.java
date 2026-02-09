@@ -63,7 +63,7 @@ public class TextEmbeddingQueryVectorBuilder implements QueryVectorBuilder {
 
     public TextEmbeddingQueryVectorBuilder(String modelId, String modelText) {
         this.modelId = modelId;
-        this.modelText = modelText;
+        this.modelText = Objects.requireNonNull(modelText);
     }
 
     public TextEmbeddingQueryVectorBuilder(StreamInput in) throws IOException {
@@ -100,10 +100,7 @@ public class TextEmbeddingQueryVectorBuilder implements QueryVectorBuilder {
 
     @Override
     public void buildVector(Client client, ActionListener<float[]> listener) {
-
-        if (modelId == null) {
-            throw new IllegalArgumentException("[model_id] must not be null.");
-        }
+        validate();
 
         CoordinatedInferenceAction.Request inferRequest = CoordinatedInferenceAction.Request.forTextInput(
             modelId,
@@ -138,6 +135,13 @@ public class TextEmbeddingQueryVectorBuilder implements QueryVectorBuilder {
                 );
             }
         }, listener::onFailure));
+    }
+
+    @Override
+    public void validate() {
+        if (modelId == null) {
+            throw new IllegalArgumentException("[model_id] must not be null.");
+        }
     }
 
     public String getModelText() {
