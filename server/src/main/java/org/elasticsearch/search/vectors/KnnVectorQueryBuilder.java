@@ -218,8 +218,7 @@ public class KnnVectorQueryBuilder extends AbstractQueryBuilder<KnnVectorQueryBu
         this(fieldName, queryVector, null, null, k, numCands, visitPercentage, rescoreVectorBuilder, vectorSimilarity);
     }
 
-    // TODO: Make copies via builder instead of making this public
-    public KnnVectorQueryBuilder(
+    private KnnVectorQueryBuilder(
         String fieldName,
         VectorData queryVector,
         QueryVectorBuilder queryVectorBuilder,

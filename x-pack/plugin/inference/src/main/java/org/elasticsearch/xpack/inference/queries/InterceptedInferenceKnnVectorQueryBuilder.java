@@ -15,6 +15,7 @@ import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.cluster.metadata.InferenceFieldMetadata;
 import org.elasticsearch.common.io.stream.StreamInput;
+import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.query.MatchNoneQueryBuilder;
 import org.elasticsearch.index.query.QueryBuilder;
@@ -28,6 +29,7 @@ import org.elasticsearch.search.vectors.KnnVectorQueryBuilder;
 import org.elasticsearch.search.vectors.QueryVectorBuilder;
 import org.elasticsearch.search.vectors.QueryVectorBuilderAsyncAction;
 import org.elasticsearch.search.vectors.VectorData;
+import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xpack.core.ml.inference.results.MlDenseEmbeddingResults;
 import org.elasticsearch.xpack.core.ml.vectors.TextEmbeddingQueryVectorBuilder;
 import org.elasticsearch.xpack.inference.mapper.SemanticTextField;
@@ -49,8 +51,11 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
 
     private static final TransportVersion NEW_SEMANTIC_QUERY_INTERCEPTORS = TransportVersion.fromName("new_semantic_query_interceptors");
 
+    private final SetOnce<float[]> queryVectorSupplier;
+
     public InterceptedInferenceKnnVectorQueryBuilder(KnnVectorQueryBuilder originalQuery) {
         super(originalQuery);
+        this.queryVectorSupplier = null;
     }
 
     public InterceptedInferenceKnnVectorQueryBuilder(
@@ -58,10 +63,12 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
         Map<FullyQualifiedInferenceId, InferenceResults> inferenceResultsMap
     ) {
         super(originalQuery, inferenceResultsMap);
+        this.queryVectorSupplier = null;
     }
 
     public InterceptedInferenceKnnVectorQueryBuilder(StreamInput in) throws IOException {
         super(in);
+        this.queryVectorSupplier = null;
     }
 
     private InterceptedInferenceKnnVectorQueryBuilder(
@@ -71,6 +78,32 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
         boolean interceptedCcsRequest
     ) {
         super(other, inferenceResultsMap, inferenceInfoFuture, interceptedCcsRequest);
+        this.queryVectorSupplier = null;
+    }
+
+    private InterceptedInferenceKnnVectorQueryBuilder(
+        InterceptedInferenceQueryBuilder<KnnVectorQueryBuilder> other,
+        KnnVectorQueryBuilder originalQuery,
+        SetOnce<float[]> queryVectorSupplier
+    ) {
+        super(originalQuery, other.inferenceResultsMap, other.inferenceInfoFuture, other.interceptedCcsRequest);
+        this.queryVectorSupplier = queryVectorSupplier;
+    }
+
+    @Override
+    protected void doWriteTo(StreamOutput out) throws IOException {
+        if (queryVectorSupplier != null) {
+            throw new IllegalStateException("Cannot serialize query vector supplier. Missing a rewriteAndFetch?");
+        }
+        super.doWriteTo(out);
+    }
+
+    @Override
+    protected void doXContent(XContentBuilder builder, Params params) throws IOException {
+        if (queryVectorSupplier != null) {
+            throw new IllegalStateException("Cannot serialize query vector supplier. Missing a rewriteAndFetch?");
+        }
+        super.doXContent(builder, params);
     }
 
     @Override
@@ -80,6 +113,12 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
 
     @Override
     protected String getQuery() {
+        if (queryVectorSupplier != null) {
+            // We are in the process of rewriting a complete & valid query vector builder to generate a query vector. Return null to prevent
+            // InferenceQueryUtils from attempting to generate inference results based on the query text.
+            return null;
+        }
+
         String query = null;
         QueryVectorBuilder queryVectorBuilder = originalQuery.queryVectorBuilder();
         if (queryVectorBuilder instanceof TextEmbeddingQueryVectorBuilder textEmbeddingQueryVectorBuilder) {
@@ -103,7 +142,7 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
     protected InterceptedInferenceQueryBuilder<KnnVectorQueryBuilder> customDoRewriteWaitForInferenceResults(
         QueryRewriteContext queryRewriteContext
     ) throws IOException {
-        InterceptedInferenceQueryBuilder<KnnVectorQueryBuilder> rewritten = this;
+        InterceptedInferenceKnnVectorQueryBuilder rewritten = this;
 
         // knn query may contain filters that are also intercepted.
         // We need to rewrite those here so that we can get inference results for them too.
@@ -115,8 +154,8 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
         return rewritten;
     }
 
-    private static InterceptedInferenceQueryBuilder<KnnVectorQueryBuilder> rewriteFilterQueries(
-        InterceptedInferenceQueryBuilder<KnnVectorQueryBuilder> queryBuilder,
+    private static InterceptedInferenceKnnVectorQueryBuilder rewriteFilterQueries(
+        InterceptedInferenceKnnVectorQueryBuilder queryBuilder,
         QueryRewriteContext queryRewriteContext
     ) throws IOException {
         KnnVectorQueryBuilder originalQuery = queryBuilder.originalQuery;
@@ -141,11 +180,30 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
         return queryBuilder;
     }
 
-    private static InterceptedInferenceQueryBuilder<KnnVectorQueryBuilder> rewriteQueryVectorBuilder(
-        InterceptedInferenceQueryBuilder<KnnVectorQueryBuilder> queryBuilder,
+    private static InterceptedInferenceKnnVectorQueryBuilder rewriteQueryVectorBuilder(
+        InterceptedInferenceKnnVectorQueryBuilder queryBuilder,
         QueryRewriteContext queryRewriteContext
     ) {
-        KnnVectorQueryBuilder originalQuery = queryBuilder.originalQuery;
+        final KnnVectorQueryBuilder originalQuery = queryBuilder.originalQuery;
+        final SetOnce<float[]> queryVectorSupplier = queryBuilder.queryVectorSupplier;
+
+        if (queryVectorSupplier != null) {
+            if (queryVectorSupplier.get() == null) {
+                return queryBuilder;
+            }
+
+            KnnVectorQueryBuilder rewrittenOriginalQuery = new KnnVectorQueryBuilder(
+                originalQuery.getFieldName(),
+                queryVectorSupplier.get(),
+                originalQuery.k(),
+                originalQuery.numCands(),
+                originalQuery.visitPercentage(),
+                originalQuery.rescoreVectorBuilder(),
+                originalQuery.getVectorSimilarity()
+            ).boost(originalQuery.boost()).queryName(originalQuery.queryName()).addFilterQueries(originalQuery.filterQueries());
+
+            return new InterceptedInferenceKnnVectorQueryBuilder(queryBuilder, rewrittenOriginalQuery, null);
+        }
 
         QueryVectorBuilder queryVectorBuilder = originalQuery.queryVectorBuilder();
         if (queryVectorBuilder == null) {
@@ -161,35 +219,13 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
             // detecting complete & valid query vector builder so that we can rewrite them.
         }
 
-        InterceptedInferenceQueryBuilder<KnnVectorQueryBuilder> rewritten = queryBuilder;
         if (validQueryVectorBuilder) {
-            SetOnce<float[]> queryVectorSupplier = new SetOnce<>();
-            QueryVectorBuilderAsyncAction.registerAction(queryRewriteContext, queryVectorBuilder, queryVectorSupplier);
-
-            // TODO: Use builder to copy kNN query
-            KnnVectorQueryBuilder rewrittenOriginalQuery = new KnnVectorQueryBuilder(
-                originalQuery.getFieldName(),
-                originalQuery.queryVector(),
-                null,
-                queryVectorSupplier::get,
-                originalQuery.k(),
-                originalQuery.numCands(),
-                originalQuery.visitPercentage(),
-                originalQuery.rescoreVectorBuilder(),
-                originalQuery.getVectorSimilarity()
-            ).boost(originalQuery.boost())
-                .queryName(originalQuery.queryName())
-                .addFilterQueries(originalQuery.filterQueries())
-                .setAutoPrefilteringEnabled(originalQuery.isAutoPrefilteringEnabled());
-
-            // Complete & valid query vector builders are always rewritten on the local cluster coordinator node, prior to getting inference
-            // results for inference fields. Thus, we can assume that the inference results map is null, and it is safe to use this
-            // constructor.
-            assert queryBuilder.inferenceResultsMap == null;
-            rewritten = new InterceptedInferenceKnnVectorQueryBuilder(rewrittenOriginalQuery);
+            SetOnce<float[]> newQueryVectorSupplier = new SetOnce<>();
+            QueryVectorBuilderAsyncAction.registerAction(queryRewriteContext, queryVectorBuilder, newQueryVectorSupplier);
+            return new InterceptedInferenceKnnVectorQueryBuilder(queryBuilder, originalQuery, newQueryVectorSupplier);
         }
 
-        return rewritten;
+        return queryBuilder;
     }
 
     @Override
@@ -285,7 +321,7 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
     }
 
     @Override
-    protected InterceptedInferenceQueryBuilder<KnnVectorQueryBuilder> copy(
+    protected InterceptedInferenceKnnVectorQueryBuilder copy(
         Map<FullyQualifiedInferenceId, InferenceResults> inferenceResultsMap,
         PlainActionFuture<InferenceQueryUtils.InferenceInfo> inferenceInfoFuture,
         boolean interceptedCcsRequest

@@ -73,11 +73,7 @@ public abstract class InterceptedInferenceQueryBuilder<T extends AbstractQueryBu
     }
 
     protected InterceptedInferenceQueryBuilder(T originalQuery, Map<FullyQualifiedInferenceId, InferenceResults> inferenceResultsMap) {
-        Objects.requireNonNull(originalQuery, "original query must not be null");
-        this.originalQuery = originalQuery;
-        this.inferenceResultsMap = inferenceResultsMap != null ? Map.copyOf(inferenceResultsMap) : null;
-        this.inferenceInfoFuture = null;
-        this.interceptedCcsRequest = false;
+        this(originalQuery, inferenceResultsMap != null ? Map.copyOf(inferenceResultsMap) : null, null, false);
     }
 
     @SuppressWarnings("unchecked")
@@ -108,7 +104,16 @@ public abstract class InterceptedInferenceQueryBuilder<T extends AbstractQueryBu
         PlainActionFuture<InferenceQueryUtils.InferenceInfo> inferenceInfoFuture,
         boolean interceptedCcsRequest
     ) {
-        this.originalQuery = other.originalQuery;
+        this(other.originalQuery, inferenceResultsMap, inferenceInfoFuture, interceptedCcsRequest);
+    }
+
+    protected InterceptedInferenceQueryBuilder(
+        T originalQuery,
+        Map<FullyQualifiedInferenceId, InferenceResults> inferenceResultsMap,
+        PlainActionFuture<InferenceQueryUtils.InferenceInfo> inferenceInfoFuture,
+        boolean interceptedCcsRequest
+    ) {
+        this.originalQuery = Objects.requireNonNull(originalQuery, "original query must not be null");
         this.inferenceResultsMap = inferenceResultsMap;
         this.inferenceInfoFuture = inferenceInfoFuture;
         this.interceptedCcsRequest = interceptedCcsRequest;
@@ -212,6 +217,7 @@ public abstract class InterceptedInferenceQueryBuilder<T extends AbstractQueryBu
      */
     protected void postInferenceCoordinatorNodeValidate(InferenceQueryUtils.InferenceInfo inferenceInfo) {}
 
+    // TODO: Remove
     protected T rewriteToOriginalQuery(Map<FullyQualifiedInferenceId, InferenceResults> inferenceResultsMap) {
         return originalQuery;
     }
@@ -327,9 +333,6 @@ public abstract class InterceptedInferenceQueryBuilder<T extends AbstractQueryBu
 
     private QueryBuilder doRewriteWaitForInferenceResults(QueryRewriteContext queryRewriteContext, boolean alwaysSkipRemotes) {
         ResolvedIndices resolvedIndices = queryRewriteContext.getResolvedIndices();
-
-        // TODO: If getQuery() == null, rewrite the original query. Need to worry about the original query being re-intercepted?
-
         if (inferenceInfoFuture != null) {
             InferenceQueryUtils.InferenceInfo inferenceInfo = getResultFromFuture(inferenceInfoFuture);
             if (inferenceInfo == null) {
@@ -345,7 +348,7 @@ public abstract class InterceptedInferenceQueryBuilder<T extends AbstractQueryBu
             if (inferenceFieldCount == 0 && interceptedCcsRequest == false) {
                 // We aren't querying any inference fields and this query wasn't intercepted in a previous coordinator node rewrite.
                 // Therefore, we don't need to intercept the query.
-                rewritten = rewriteToOriginalQuery(newInferenceResultsMap);
+                rewritten = originalQuery;
             } else if (Objects.equals(inferenceResultsMap, newInferenceResultsMap) == false) {
                 inferenceResultsErrorCheck(newInferenceResultsMap);
                 boolean newInterceptedCcsRequest = this.interceptedCcsRequest
