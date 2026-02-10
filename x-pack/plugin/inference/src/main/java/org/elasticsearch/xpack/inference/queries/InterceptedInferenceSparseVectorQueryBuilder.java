@@ -181,7 +181,7 @@ public class InterceptedInferenceSparseVectorQueryBuilder extends InterceptedInf
         for (IndexMetadata indexMetadata : indexMetadataCollection) {
             InferenceFieldMetadata inferenceFieldMetadata = indexMetadata.getInferenceFields().get(getField());
             if (inferenceFieldMetadata == null) {
-                missingInferenceIdOverrideCheck();
+                explicitInferenceIdCheck();
             } else {
                 inferenceFieldsQueried++;
             }
@@ -189,8 +189,8 @@ public class InterceptedInferenceSparseVectorQueryBuilder extends InterceptedInf
 
         // We can skip remote cluster inference info gathering if:
         // - Inference fields are queried locally, guaranteeing that the query will be intercepted
-        // - The inference ID override or query vector is set. In either case, remote cluster inference results are not required.
-        return inferenceFieldsQueried > 0 && (getInferenceIdOverride() != null || originalQuery.getQueryVectors() != null);
+        // - An explicit inference ID or query vector is set. In either case, remote cluster inference results are not required.
+        return inferenceFieldsQueried > 0 && (originalQuery.getInferenceId() != null || originalQuery.getQueryVectors() != null);
     }
 
     @Override
@@ -199,7 +199,7 @@ public class InterceptedInferenceSparseVectorQueryBuilder extends InterceptedInf
         // the index count. Since the sparse vector query is a single-field query, they should match if we are querying only inference
         // fields.
         if (inferenceInfo.inferenceFieldCount() < inferenceInfo.indexCount()) {
-            missingInferenceIdOverrideCheck();
+            explicitInferenceIdCheck();
         }
     }
 
@@ -372,7 +372,7 @@ public class InterceptedInferenceSparseVectorQueryBuilder extends InterceptedInf
         return textExpansionResults.getWeightedTokens();
     }
 
-    private void missingInferenceIdOverrideCheck() {
+    private void explicitInferenceIdCheck() {
         if (originalQuery.getQuery() != null && originalQuery.getInferenceId() == null) {
             throw new IllegalArgumentException(
                 SparseVectorQueryBuilder.INFERENCE_ID_FIELD.getPreferredName() + " required to perform vector search on query string"
