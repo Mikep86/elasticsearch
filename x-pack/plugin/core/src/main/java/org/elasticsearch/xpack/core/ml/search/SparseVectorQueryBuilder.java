@@ -134,9 +134,8 @@ public class SparseVectorQueryBuilder extends AbstractQueryBuilder<SparseVectorQ
         this.weightedTokensSupplier = null;
     }
 
-    // TODO: refactor so this doesn't need to be public
     // TODO: Does this constructor drop boost and query name?
-    public SparseVectorQueryBuilder(SparseVectorQueryBuilder other, SetOnce<TextExpansionResults> weightedTokensSupplier) {
+    private SparseVectorQueryBuilder(SparseVectorQueryBuilder other, SetOnce<TextExpansionResults> weightedTokensSupplier) {
         this.fieldName = other.fieldName;
         this.shouldPruneTokens = other.shouldPruneTokens;
         this.queryVectors = other.queryVectors;
