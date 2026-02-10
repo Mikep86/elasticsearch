@@ -366,7 +366,6 @@ public abstract class InterceptedInferenceQueryBuilder<T extends AbstractQueryBu
             getFields(),
             getQuery(),
             inferenceResultsMap,
-            getInferenceIdOverride(),
             resolveWildcards(),
             useDefaultFields(),
             alwaysSkipRemotes
