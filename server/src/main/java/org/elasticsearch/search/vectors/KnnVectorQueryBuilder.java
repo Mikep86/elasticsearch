@@ -444,7 +444,7 @@ public class KnnVectorQueryBuilder extends AbstractQueryBuilder<KnnVectorQueryBu
             return new KnnVectorQueryBuilder(
                 fieldName,
                 queryVector,
-                null,
+                queryVectorBuilder,
                 toSet::get,
                 k,
                 numCands,
