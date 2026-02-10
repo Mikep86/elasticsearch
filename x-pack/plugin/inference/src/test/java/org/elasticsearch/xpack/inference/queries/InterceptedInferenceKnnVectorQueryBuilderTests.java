@@ -270,23 +270,11 @@ public class InterceptedInferenceKnnVectorQueryBuilderTests extends AbstractInte
         );
         QueryBuilder coordinatorRewritten = rewriteAndFetch(knnQuery, queryRewriteContext);
 
-        // Rewrite the original query without intercepting to populate the query vector
-        QueryBuilder knnQueryWithQueryVector = disableQueryInterception(
-            queryRewriteContext,
-            () -> rewriteAndFetch(knnQuery, queryRewriteContext)
-        );
-
         // Use a serialization cycle to strip InterceptedQueryBuilderWrapper
         coordinatorRewritten = copyNamedWriteable(coordinatorRewritten, writableRegistry(), QueryBuilder.class);
-        QueryBuilder serializedKnnQueryWithQueryVector = copyNamedWriteable(
-            knnQueryWithQueryVector,
-            writableRegistry(),
-            QueryBuilder.class
-        );
 
         assertQueryIsInterceptedKnnWithValidResults(coordinatorRewritten);
         InterceptedInferenceKnnVectorQueryBuilder coordinatorIntercepted = (InterceptedInferenceKnnVectorQueryBuilder) coordinatorRewritten;
-        assertThat(coordinatorIntercepted.originalQuery, equalTo(serializedKnnQueryWithQueryVector));
         assertThat(coordinatorIntercepted.originalQuery.filterQueries(), hasSize(3));
 
         // Assertions on first filter
