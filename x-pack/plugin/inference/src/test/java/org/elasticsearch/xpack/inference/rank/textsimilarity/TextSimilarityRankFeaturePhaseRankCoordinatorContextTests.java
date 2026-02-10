@@ -73,6 +73,20 @@ public class TextSimilarityRankFeaturePhaseRankCoordinatorContextTests extends E
         );
     }
 
+    public void testExtractScoresFromRankedDocWithEmptyFeatureData() {
+        final List<RankedDocsResults.RankedDoc> rankedDocs = List.of(
+            new RankedDocsResults.RankedDoc(0, 3.0f, "text 1"),
+            new RankedDocsResults.RankedDoc(1, 2.0f, "text 3")
+        );
+        final RankFeatureDoc[] featureDocs = new RankFeatureDoc[] {
+            createRankFeatureDoc(0, 0.25f, 0, List.of("text 1")),
+            createRankFeatureDoc(1, 0.50f, 1, List.of()),
+            createRankFeatureDoc(2, 0.75f, 2, List.of("text 3")) };
+
+        IllegalStateException e = assertThrows(IllegalStateException.class, () -> extractScoresFromRankedDocs(rankedDocs, featureDocs));
+        assertEquals("Feature doc at index 1 does not have any features", e.getMessage());
+    }
+
     public void testExtractScoresFromEmptyRankedDocs() {
         // Tests the scenario when there are no docs to rerank. In this case, both rankedDocs and featureDocs are empty.
         float[] scores = extractScoresFromRankedDocs(List.of(), new RankFeatureDoc[0]);

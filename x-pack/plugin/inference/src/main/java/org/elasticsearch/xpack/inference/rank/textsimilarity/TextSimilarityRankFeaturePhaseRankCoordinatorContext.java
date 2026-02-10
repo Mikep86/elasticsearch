@@ -160,6 +160,10 @@ public class TextSimilarityRankFeaturePhaseRankCoordinatorContext extends RankFe
         List<Integer> rankedDocToFeatureDoc = new ArrayList<>();
         for (int i = 0; i < featureDocs.length; i++) {
             RankFeatureDoc featureDoc = featureDocs[i];
+            if (featureDoc.featureData.isEmpty()) {
+                throw new IllegalStateException("Feature doc at index " + i + " does not have any features");
+            }
+
             for (int j = 0; j < featureDoc.featureData.size(); j++) {
                 rankedDocToFeatureDoc.add(i);
             }
@@ -183,12 +187,7 @@ public class TextSimilarityRankFeaturePhaseRankCoordinatorContext extends RankFe
 
         float[] result = new float[featureDocs.length];
         for (int i = 0; i < featureDocs.length; i++) {
-            Float score = scores.get(i);
-            if (score == null) {
-                throw new IllegalStateException("No score for feature doc at index " + i);
-            }
-
-            result[i] = score;
+            result[i] = scores.get(i);
         }
 
         return result;
