@@ -41,8 +41,6 @@ import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
-import static org.elasticsearch.transport.RemoteClusterAware.LOCAL_CLUSTER_GROUP_KEY;
-
 public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInferenceQueryBuilder<KnnVectorQueryBuilder> {
     public static final String NAME = "intercepted_inference_knn";
 
@@ -128,12 +126,6 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
         }
 
         return query;
-    }
-
-    @Override
-    protected FullyQualifiedInferenceId getInferenceIdOverride() {
-        String modelId = getQueryVectorBuilderModelId();
-        return modelId != null ? new FullyQualifiedInferenceId(LOCAL_CLUSTER_GROUP_KEY, modelId) : null;
     }
 
     @Override
@@ -246,48 +238,6 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
     }
 
     @Override
-    protected KnnVectorQueryBuilder rewriteToOriginalQuery(Map<FullyQualifiedInferenceId, InferenceResults> inferenceResultsMap) {
-        KnnVectorQueryBuilder rewritten = originalQuery;
-
-        FullyQualifiedInferenceId inferenceIdOverride = getInferenceIdOverride();
-        if (inferenceIdOverride != null) {
-            InferenceResults inferenceResults = inferenceResultsMap.get(inferenceIdOverride);
-            if (inferenceResults == null) {
-                // The inference results map should always contain the inference results for the override
-                throw new IllegalStateException(
-                    "Inference results map does not contain inference results for [" + inferenceIdOverride + "]"
-                );
-            }
-
-            if (inferenceResults instanceof MlDenseEmbeddingResults mlDenseEmbeddingResults) {
-                // TODO: Did we forget to propagate autoPrefilteringEnabled here?
-                rewritten = new KnnVectorQueryBuilder(
-                    originalQuery.getFieldName(),
-                    mlDenseEmbeddingResults.getInferenceAsFloat(),
-                    originalQuery.k(),
-                    originalQuery.numCands(),
-                    originalQuery.visitPercentage(),
-                    originalQuery.rescoreVectorBuilder(),
-                    originalQuery.getVectorSimilarity()
-                );
-                rewritten.queryName(originalQuery.queryName()).boost(originalQuery.boost()).setFilterQueries(originalQuery.filterQueries());
-            } else {
-                throw new IllegalArgumentException(
-                    "expected a result of type ["
-                        + MlDenseEmbeddingResults.NAME
-                        + "] received ["
-                        + inferenceResults.getWriteableName()
-                        + "]. Is ["
-                        + inferenceIdOverride.inferenceId()
-                        + "] a text embedding model?"
-                );
-            }
-        }
-
-        return rewritten;
-    }
-
-    @Override
     protected QueryBuilder doRewriteBwC(QueryRewriteContext queryRewriteContext) throws IOException {
         QueryBuilder rewritten = this;
         if (queryRewriteContext.getMinTransportVersion().supports(NEW_SEMANTIC_QUERY_INTERCEPTORS) == false) {
@@ -344,16 +294,6 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
         return originalQuery.getFieldName();
     }
 
-    private String getQueryVectorBuilderModelId() {
-        String modelId = null;
-        QueryVectorBuilder queryVectorBuilder = originalQuery.queryVectorBuilder();
-        if (queryVectorBuilder instanceof TextEmbeddingQueryVectorBuilder textEmbeddingQueryVectorBuilder) {
-            modelId = textEmbeddingQueryVectorBuilder.getModelId();
-        }
-
-        return modelId;
-    }
-
     private QueryBuilder querySemanticTextField(String clusterAlias, SemanticTextFieldMapper.SemanticTextFieldType semanticTextFieldType) {
         MinimalServiceSettings modelSettings = semanticTextFieldType.getModelSettings();
         if (modelSettings == null) {
@@ -365,12 +305,9 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
 
         VectorData queryVector = originalQuery.queryVector();
         if (queryVector == null) {
-            FullyQualifiedInferenceId fullyQualifiedInferenceId = getInferenceIdOverride();
-            if (fullyQualifiedInferenceId == null) {
-                fullyQualifiedInferenceId = new FullyQualifiedInferenceId(clusterAlias, semanticTextFieldType.getSearchInferenceId());
-            }
-
-            MlDenseEmbeddingResults textEmbeddingResults = getTextEmbeddingResults(fullyQualifiedInferenceId);
+            MlDenseEmbeddingResults textEmbeddingResults = getTextEmbeddingResults(
+                new FullyQualifiedInferenceId(clusterAlias, semanticTextFieldType.getSearchInferenceId())
+            );
             queryVector = new VectorData(textEmbeddingResults.getInferenceAsFloat());
         }
 
@@ -393,16 +330,7 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
     private QueryBuilder queryNonSemanticTextField() {
         VectorData queryVector = originalQuery.queryVector();
         if (queryVector == null) {
-            FullyQualifiedInferenceId fullyQualifiedInferenceId = getInferenceIdOverride();
-            if (fullyQualifiedInferenceId == null) {
-                // This should never happen because we validate that either query vector or a valid query vector builder is specified in:
-                // - The KnnVectorQueryBuilder constructor
-                // - coordinatorNodeValidate
-                throw new IllegalStateException("No query vector or query vector builder model ID specified");
-            }
-
-            MlDenseEmbeddingResults textEmbeddingResults = getTextEmbeddingResults(fullyQualifiedInferenceId);
-            queryVector = new VectorData(textEmbeddingResults.getInferenceAsFloat());
+            throw new IllegalStateException("Query vector is not set when querying a non-inference field");
         }
 
         KnnVectorQueryBuilder knnQuery = new KnnVectorQueryBuilder(

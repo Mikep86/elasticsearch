@@ -43,7 +43,7 @@ import static org.elasticsearch.xpack.inference.queries.SemanticQueryBuilder.con
 
 /**
  * <p>
- * An internal {@link QueryBuilder} type that associates an original query builder with a map of inference results required successfully
+ * An internal {@link QueryBuilder} type that associates an original query builder with a map of inference results required to successfully
  * query a {@link SemanticTextFieldMapper.SemanticTextFieldType}.
  * </p>
  * <p>
@@ -194,13 +194,6 @@ public abstract class InterceptedInferenceQueryBuilder<T extends AbstractQueryBu
     protected abstract boolean useDefaultFields();
 
     /**
-     * Get the query-time inference ID override. If not applicable or available, {@code null} should be returned.
-     */
-    protected FullyQualifiedInferenceId getInferenceIdOverride() {
-        return null;
-    }
-
-    /**
      * Perform any custom pre-inference coordinator node validation.
      *
      * @param resolvedIndices The resolved indices
@@ -216,11 +209,6 @@ public abstract class InterceptedInferenceQueryBuilder<T extends AbstractQueryBu
      * @param inferenceInfo The inference information
      */
     protected void postInferenceCoordinatorNodeValidate(InferenceQueryUtils.InferenceInfo inferenceInfo) {}
-
-    // TODO: Remove
-    protected T rewriteToOriginalQuery(Map<FullyQualifiedInferenceId, InferenceResults> inferenceResultsMap) {
-        return originalQuery;
-    }
 
     /**
      * A hook for subclasses to do additional rewriting and inference result fetching while we are on the coordinator node.
