@@ -33,4 +33,13 @@ public interface QueryVectorBuilder extends VersionedNamedWriteable, ToXContentO
     void buildVector(Client client, ActionListener<float[]> listener);
 
     void validate();
+
+    default boolean isValid() {
+        try {
+            validate();
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
 }

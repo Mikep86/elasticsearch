@@ -124,9 +124,7 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
         if (queryVectorBuilder instanceof TextEmbeddingQueryVectorBuilder textEmbeddingQueryVectorBuilder) {
             query = textEmbeddingQueryVectorBuilder.getModelText();
         } else if (queryVectorBuilder != null) {
-            // The validate call should generate an exception. Call it to report back to the user why the query vector builder is invalid.
-            queryVectorBuilder.validate();
-            throw new IllegalStateException("Expected validate call to throw an exception");
+            throw new IllegalStateException("Query vector builder should have been rewritten to a query vector");
         }
 
         return query;
@@ -206,20 +204,7 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
         }
 
         QueryVectorBuilder queryVectorBuilder = originalQuery.queryVectorBuilder();
-        if (queryVectorBuilder == null) {
-            return queryBuilder;
-        }
-
-        boolean validQueryVectorBuilder = false;
-        try {
-            queryVectorBuilder.validate();
-            validQueryVectorBuilder = true;
-        } catch (Exception e) {
-            // Exceptions from invalid query vector builders will be thrown later in the rewrite process. Right now, we only care about
-            // detecting complete & valid query vector builder so that we can rewrite them.
-        }
-
-        if (validQueryVectorBuilder) {
+        if (queryVectorBuilder != null && queryVectorBuilder.isValid()) {
             SetOnce<float[]> newQueryVectorSupplier = new SetOnce<>();
             QueryVectorBuilderAsyncAction.registerAction(queryRewriteContext, queryVectorBuilder, newQueryVectorSupplier);
             return new InterceptedInferenceKnnVectorQueryBuilder(queryBuilder, originalQuery, newQueryVectorSupplier);
@@ -230,33 +215,25 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
 
     @Override
     protected boolean preInferenceCoordinatorNodeValidate(ResolvedIndices resolvedIndices) {
-        if (originalQuery.queryVector() == null && originalQuery.queryVectorBuilder() instanceof TextEmbeddingQueryVectorBuilder == false) {
-            // This should never happen because either query vector or query vector builder must be non-null, which is enforced by the
-            // KnnVectorQueryBuilder constructor. The only query vector builder used in production is TextEmbeddingQueryVectorBuilder,
-            // thus if it is not this type it is null.
-            // We could throw here _if_ we add a new query vector builder type and forget to update this class to support it, which would
-            // be a server-side error.
-            throw new IllegalStateException(
-                "No [" + TextEmbeddingQueryVectorBuilder.NAME + "] query vector builder or query vector specified"
-            );
-        }
-
-        // Check if we are querying any non-inference fields locally
+        // Check the field types we are querying locally
+        int nonInferenceFieldsQueried = 0;
         int inferenceFieldsQueried = 0;
         Collection<IndexMetadata> indexMetadataCollection = resolvedIndices.getConcreteLocalIndicesMetadata().values();
         for (IndexMetadata indexMetadata : indexMetadataCollection) {
             InferenceFieldMetadata inferenceFieldMetadata = indexMetadata.getInferenceFields().get(getField());
             if (inferenceFieldMetadata == null) {
-                missingInferenceIdOverrideCheck();
+                nonInferenceFieldsQueried++;
             } else {
                 inferenceFieldsQueried++;
             }
         }
 
+        validateQueryVectorBuilder(nonInferenceFieldsQueried > 0);
+
         // We can skip remote cluster inference info gathering if:
         // - Inference fields are queried locally, guaranteeing that the query will be intercepted
-        // - The inference ID override or query vector is set. In either case, remote cluster inference results are not required.
-        return inferenceFieldsQueried > 0 && (getInferenceIdOverride() != null || originalQuery.queryVector() != null);
+        // - A valid query vector builder or query vector is set. In either case, remote cluster inference results are not required.
+        return inferenceFieldsQueried > 0 && (hasValidQueryVectorBuilder() || originalQuery.queryVector() != null);
     }
 
     @Override
@@ -264,7 +241,7 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
         // Detect if we are querying any non-inference fields locally or remotely. We can do this by comparing the inference field count to
         // the index count. Since the knn query is a single-field query, they should match if we are querying only inference fields.
         if (inferenceInfo.inferenceFieldCount() < inferenceInfo.indexCount()) {
-            missingInferenceIdOverrideCheck();
+            validateQueryVectorBuilder(true);
         }
     }
 
@@ -465,5 +442,24 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
             && textEmbeddingQueryVectorBuilder.getModelId() == null) {
             throw new IllegalArgumentException("[model_id] must not be null.");
         }
+    }
+
+    private void validateQueryVectorBuilder(boolean requireExplicitInferenceId) {
+        QueryVectorBuilder queryVectorBuilder = originalQuery.queryVectorBuilder();
+        if (queryVectorBuilder instanceof TextEmbeddingQueryVectorBuilder tevb) {
+            // TextEmbeddingQueryVectorBuilder only needs validation when an explicit inference ID is required. A non-null model text value
+            // is guaranteed by its constructor.
+            if (requireExplicitInferenceId) {
+                tevb.validate();
+            }
+        } else if (queryVectorBuilder != null) {
+            // Other query vector builder types always require validation
+            queryVectorBuilder.validate();
+        }
+    }
+
+    private boolean hasValidQueryVectorBuilder() {
+        QueryVectorBuilder queryVectorBuilder = originalQuery.queryVectorBuilder();
+        return queryVectorBuilder != null && queryVectorBuilder.isValid();
     }
 }
