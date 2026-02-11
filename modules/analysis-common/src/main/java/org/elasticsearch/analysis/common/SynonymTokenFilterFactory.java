@@ -236,7 +236,7 @@ public class SynonymTokenFilterFactory extends AbstractTokenFilterFactory {
         try {
             SynonymMap.Builder parser;
             if ("wordnet".equalsIgnoreCase(format)) {
-                parser = new ESWordnetSynonymParser(true, expand, lenient, analyzer);
+                parser = new ESWordnetSynonymParser(true, expand, lenient, analyzer, circuitBreaker);
                 ((ESWordnetSynonymParser) parser).parse(rules.reader);
             } else {
                 parser = new ESSolrSynonymParser(true, expand, lenient, analyzer, circuitBreaker);
