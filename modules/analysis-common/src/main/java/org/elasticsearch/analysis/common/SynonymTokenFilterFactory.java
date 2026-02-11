@@ -14,6 +14,7 @@ import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.synonym.SynonymFilter;
 import org.apache.lucene.analysis.synonym.SynonymMap;
 import org.elasticsearch.common.breaker.CircuitBreaker;
+import org.elasticsearch.common.breaker.CircuitBreakingException;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.env.Environment;
 import org.elasticsearch.index.IndexService.IndexCreationContext;
@@ -34,6 +35,7 @@ import java.util.List;
 import java.util.function.Function;
 
 public class SynonymTokenFilterFactory extends AbstractTokenFilterFactory {
+    private static final SynonymMap EMPTY_SYNONYM_MAP = new SynonymMap(null, null, 0);
 
     protected enum SynonymsSource {
         INLINE("synonyms") {
@@ -242,6 +244,11 @@ public class SynonymTokenFilterFactory extends AbstractTokenFilterFactory {
             }
             return parser.build();
         } catch (Exception e) {
+            if (lenient && e instanceof CircuitBreakingException) {
+                // TODO: Should we log the circuit breaker trip?
+                return EMPTY_SYNONYM_MAP;
+            }
+
             throw new IllegalArgumentException("failed to build synonyms from [" + rules.origin + "]", e);
         }
     }
