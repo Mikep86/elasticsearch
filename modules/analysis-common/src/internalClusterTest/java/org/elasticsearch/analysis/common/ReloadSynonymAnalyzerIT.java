@@ -180,8 +180,7 @@ public class ReloadSynonymAnalyzerIT extends ESIntegTestCase {
         assertAcked(
             indicesAdmin().prepareCreate(synonymsIndex)
                 .setSettings(
-                    indexSettings(1, 0)
-                        .put("index.routing.allocation.include._name", dataNodeName)  // Pin the shard to a specific node
+                    indexSettings(1, 0).put("index.routing.allocation.include._name", dataNodeName)  // Pin the shard to a specific node
                         .put("analysis.analyzer.my_synonym_analyzer.tokenizer", "standard")
                         .put("analysis.analyzer.my_synonym_analyzer.filter", "my_synonym_filter")
                         .put("analysis.filter.my_synonym_filter.type", "synonym")
@@ -211,11 +210,7 @@ public class ReloadSynonymAnalyzerIT extends ESIntegTestCase {
                 TransportReloadAnalyzersAction.TYPE,
                 new ReloadAnalyzersRequest(null, false, synonymsIndex, noSynonymsIndex)
             ).actionGet();
-            assertReloadAnalyzers(
-                reloadResponse,
-                2,
-                Map.of(synonymsIndex, Set.of("my_synonym_analyzer"), noSynonymsIndex, Set.of())
-            );
+            assertReloadAnalyzers(reloadResponse, 2, Map.of(synonymsIndex, Set.of("my_synonym_analyzer"), noSynonymsIndex, Set.of()));
 
             // Index stays green because lenient mode returns an empty synonyms map
             ensureGreen(synonymsIndex, noSynonymsIndex);
@@ -238,11 +233,7 @@ public class ReloadSynonymAnalyzerIT extends ESIntegTestCase {
             TransportReloadAnalyzersAction.TYPE,
             new ReloadAnalyzersRequest(null, false, synonymsIndex, noSynonymsIndex)
         ).actionGet();
-        assertReloadAnalyzers(
-            reloadResponse,
-            2,
-            Map.of(synonymsIndex, Set.of("my_synonym_analyzer"), noSynonymsIndex, Set.of())
-        );
+        assertReloadAnalyzers(reloadResponse, 2, Map.of(synonymsIndex, Set.of("my_synonym_analyzer"), noSynonymsIndex, Set.of()));
         assertAnalysis(synonymsIndex, "my_synonym_analyzer", "foo", Set.of("foo", "baz", testTerm));
         ensureGreen(synonymsIndex, noSynonymsIndex);
         ensureStableCluster(internalCluster().size());
@@ -271,7 +262,11 @@ public class ReloadSynonymAnalyzerIT extends ESIntegTestCase {
                 )
                 .setMapping("field", "type=text,analyzer=standard,search_analyzer=my_synonym_analyzer")
         );
-        assertAcked(indicesAdmin().prepareCreate(noSynonymsIndex).setSettings(indexSettings(cluster().numDataNodes(), 0)).setMapping("field", "type=text"));
+        assertAcked(
+            indicesAdmin().prepareCreate(noSynonymsIndex)
+                .setSettings(indexSettings(cluster().numDataNodes(), 0))
+                .setMapping("field", "type=text")
+        );
 
         prepareIndex(synonymsIndex).setId("1").setSource("field", "foo").get();
         prepareIndex(noSynonymsIndex).setId("2").setSource("field", "bar").get();
