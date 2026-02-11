@@ -271,7 +271,7 @@ public class ReloadSynonymAnalyzerIT extends ESIntegTestCase {
                 )
                 .setMapping("field", "type=text,analyzer=standard,search_analyzer=my_synonym_analyzer")
         );
-        assertAcked(indicesAdmin().prepareCreate(noSynonymsIndex).setMapping("field", "type=text"));
+        assertAcked(indicesAdmin().prepareCreate(noSynonymsIndex).setSettings(indexSettings(cluster().numDataNodes(), 0)).setMapping("field", "type=text"));
 
         prepareIndex(synonymsIndex).setId("1").setSource("field", "foo").get();
         prepareIndex(noSynonymsIndex).setId("2").setSource("field", "bar").get();
