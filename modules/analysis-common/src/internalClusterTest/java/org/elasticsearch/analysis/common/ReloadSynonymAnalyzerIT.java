@@ -167,7 +167,90 @@ public class ReloadSynonymAnalyzerIT extends ESIntegTestCase {
         assertAnalysis(indexName, "my_synonym_analyzer", "foo", Set.of("foo", "baz", "buzz"));
     }
 
-    public void testSynonymsUpdateTripsCircuitBreaker() throws Exception {
+    public void testSynonymsUpdateTripsCircuitBreakerWithLenientTrue() throws Exception {
+        final String synonymsIndex = "synonyms-index";
+        final String noSynonymsIndex = "no-synonyms-index";
+
+        Path config = internalCluster().getInstance(Environment.class).configDir();
+        String synonymsFileName = "synonyms.txt";
+        Path synonymsFile = config.resolve(synonymsFileName);
+        writeFile(synonymsFile, "foo, baz");
+
+        String dataNodeName = internalCluster().getRandomDataNodeName();
+        assertAcked(
+            indicesAdmin().prepareCreate(synonymsIndex)
+                .setSettings(
+                    indexSettings(1, 0)
+                        .put("index.routing.allocation.include._name", dataNodeName)  // Pin the shard to a specific node
+                        .put("analysis.analyzer.my_synonym_analyzer.tokenizer", "standard")
+                        .put("analysis.analyzer.my_synonym_analyzer.filter", "my_synonym_filter")
+                        .put("analysis.filter.my_synonym_filter.type", "synonym")
+                        .put("analysis.filter.my_synonym_filter.updateable", "true")
+                        .put("analysis.filter.my_synonym_filter.lenient", "true")
+                        .put("analysis.filter.my_synonym_filter.synonyms_path", synonymsFileName)
+                )
+                .setMapping("field", "type=text,analyzer=standard,search_analyzer=my_synonym_analyzer")
+        );
+        assertAcked(indicesAdmin().prepareCreate(noSynonymsIndex).setSettings(indexSettings(1, 0)).setMapping("field", "type=text"));
+
+        prepareIndex(synonymsIndex).setId("1").setSource("field", "foo").get();
+        prepareIndex(noSynonymsIndex).setId("2").setSource("field", "bar").get();
+        assertNoFailures(indicesAdmin().prepareRefresh(synonymsIndex, noSynonymsIndex).get());
+
+        assertHitCount(prepareSearch(synonymsIndex).setQuery(QueryBuilders.matchQuery("field", "baz")), 1L);
+        assertHitCount(prepareSearch(synonymsIndex).setQuery(QueryBuilders.matchQuery("field", "buzz")), 0L);
+        assertHitCount(prepareSearch(noSynonymsIndex).setQuery(QueryBuilders.matchQuery("field", "bar")), 1L);
+        assertAnalysis(synonymsIndex, "my_synonym_analyzer", "foo", Set.of("foo", "baz"));
+
+        // Check that a circuit breaker trip uses an empty synonyms map when lenient is true
+        try (var ignored = fullyAllocateCircuitBreakerOnNode(dataNodeName, CircuitBreaker.FIELDDATA)) {
+            String testTerm = randomAlphaOfLength(10);
+            writeFile(synonymsFile, "foo, baz, " + testTerm, StandardOpenOption.WRITE);
+
+            ReloadAnalyzersResponse reloadResponse = client().execute(
+                TransportReloadAnalyzersAction.TYPE,
+                new ReloadAnalyzersRequest(null, false, synonymsIndex, noSynonymsIndex)
+            ).actionGet();
+            assertReloadAnalyzers(
+                reloadResponse,
+                2,
+                Map.of(synonymsIndex, Set.of("my_synonym_analyzer"), noSynonymsIndex, Set.of())
+            );
+
+            // Index stays green because lenient mode returns an empty synonyms map
+            ensureGreen(synonymsIndex, noSynonymsIndex);
+            ensureStableCluster(internalCluster().size());
+
+            // Synonyms are empty, so synonym-based matches no longer work
+            assertHitCount(prepareSearch(synonymsIndex).setQuery(QueryBuilders.matchQuery("field", "baz")), 0L);
+            assertHitCount(prepareSearch(synonymsIndex).setQuery(QueryBuilders.matchQuery("field", "foo")), 1L);
+            assertAnalysis(synonymsIndex, "my_synonym_analyzer", "foo", Set.of("foo"));
+
+            // Non-synonym index remains fully accessible
+            assertHitCount(prepareSearch(noSynonymsIndex).setQuery(QueryBuilders.matchQuery("field", "bar")), 1L);
+        }
+
+        // Check that the index recovers once the circuit breaker is released
+        String testTerm = randomAlphaOfLength(10);
+        writeFile(synonymsFile, "foo, baz, " + testTerm, StandardOpenOption.WRITE);
+
+        ReloadAnalyzersResponse reloadResponse = client().execute(
+            TransportReloadAnalyzersAction.TYPE,
+            new ReloadAnalyzersRequest(null, false, synonymsIndex, noSynonymsIndex)
+        ).actionGet();
+        assertReloadAnalyzers(
+            reloadResponse,
+            2,
+            Map.of(synonymsIndex, Set.of("my_synonym_analyzer"), noSynonymsIndex, Set.of())
+        );
+        assertAnalysis(synonymsIndex, "my_synonym_analyzer", "foo", Set.of("foo", "baz", testTerm));
+        ensureGreen(synonymsIndex, noSynonymsIndex);
+        ensureStableCluster(internalCluster().size());
+        assertHitCount(prepareSearch(synonymsIndex).setQuery(QueryBuilders.matchQuery("field", testTerm)), 1L);
+        assertHitCount(prepareSearch(noSynonymsIndex).setQuery(QueryBuilders.matchQuery("field", "bar")), 1L);
+    }
+
+    public void testSynonymsUpdateTripsCircuitBreakerWithLenientFalse() throws Exception {
         final String synonymsIndex = "synonyms-index";
         final String noSynonymsIndex = "no-synonyms-index";
 
@@ -183,6 +266,7 @@ public class ReloadSynonymAnalyzerIT extends ESIntegTestCase {
                         .put("analysis.analyzer.my_synonym_analyzer.filter", "my_synonym_filter")
                         .put("analysis.filter.my_synonym_filter.type", "synonym")
                         .put("analysis.filter.my_synonym_filter.updateable", "true")
+                        .put("analysis.filter.my_synonym_filter.lenient", "false")
                         .put("analysis.filter.my_synonym_filter.synonyms_path", synonymsFileName)
                 )
                 .setMapping("field", "type=text,analyzer=standard,search_analyzer=my_synonym_analyzer")
@@ -198,7 +282,7 @@ public class ReloadSynonymAnalyzerIT extends ESIntegTestCase {
         assertHitCount(prepareSearch(noSynonymsIndex).setQuery(QueryBuilders.matchQuery("field", "bar")), 1L);
         assertAnalysis(synonymsIndex, "my_synonym_analyzer", "foo", Set.of("foo", "baz"));
 
-        // Check that a circuit breaker trip sets the index to red state, but leaves the cluster otherwise functional
+        // Check that a circuit breaker trip sets the index to red state when lenient is false
         String dataNodeName = internalCluster().getRandomDataNodeName();
         try (var ignored = fullyAllocateCircuitBreakerOnNode(dataNodeName, CircuitBreaker.FIELDDATA)) {
             String testTerm = randomAlphaOfLength(10);
