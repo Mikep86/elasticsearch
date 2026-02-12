@@ -287,8 +287,8 @@ public class ReloadSynonymAnalyzerIT extends ESIntegTestCase {
                 TransportReloadAnalyzersAction.TYPE,
                 new ReloadAnalyzersRequest(null, false, synonymsIndex, noSynonymsIndex)
             ).actionGet();
-            assertTrue(reloadResponse.getFailedShards() == 1);
-            assertTrue(reloadResponse.getShardFailures().length == 1);
+            assertEquals(1, reloadResponse.getFailedShards());
+            assertEquals(1, reloadResponse.getShardFailures().length);
             assertThat(reloadResponse.getShardFailures()[0].getCause().getCause().getCause(), instanceOf(CircuitBreakingException.class));
 
             ensureRed(synonymsIndex);
