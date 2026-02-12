@@ -9,6 +9,8 @@
 
 package org.elasticsearch.analysis.common;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.synonym.SynonymFilter;
@@ -35,6 +37,8 @@ import java.util.List;
 import java.util.function.Function;
 
 public class SynonymTokenFilterFactory extends AbstractTokenFilterFactory {
+    private static final Logger LOGGER = LogManager.getLogger(SynonymTokenFilterFactory.class);
+
     private static final SynonymMap EMPTY_SYNONYM_MAP = new SynonymMap(null, null, 0);
 
     protected enum SynonymsSource {
@@ -244,12 +248,13 @@ public class SynonymTokenFilterFactory extends AbstractTokenFilterFactory {
             }
             return parser.build();
         } catch (Exception e) {
+            String message = "failed to build synonyms from [" + rules.origin + "]";
             if (lenient && e instanceof CircuitBreakingException) {
-                // TODO: Should we log the circuit breaker trip?
+                LOGGER.error(message + ". Using an empty synonyms map in its place because lenient=true.", e);
                 return EMPTY_SYNONYM_MAP;
             }
 
-            throw new IllegalArgumentException("failed to build synonyms from [" + rules.origin + "]", e);
+            throw new IllegalArgumentException(message, e);
         }
     }
 
