@@ -31,15 +31,17 @@ import org.elasticsearch.index.analysis.TokenFilterFactory;
 import org.elasticsearch.index.analysis.TokenizerFactory;
 import org.elasticsearch.synonyms.SynonymsManagementAPIService;
 
+import java.io.IOException;
 import java.io.Reader;
 import java.io.StringReader;
+import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.function.Function;
 
 public class SynonymTokenFilterFactory extends AbstractTokenFilterFactory {
     private static final Logger LOGGER = LogManager.getLogger(SynonymTokenFilterFactory.class);
 
-    private static final SynonymMap EMPTY_SYNONYM_MAP = new SynonymMap(null, null, 0);
+    private static final SynonymMap EMPTY_SYNONYM_MAP = buildEmptySynonymMap();
 
     protected enum SynonymsSource {
         INLINE("synonyms") {
@@ -261,6 +263,14 @@ public class SynonymTokenFilterFactory extends AbstractTokenFilterFactory {
     record ReaderWithOrigin(Reader reader, String origin, String resource) {
         ReaderWithOrigin(Reader reader, String origin) {
             this(reader, origin, null);
+        }
+    }
+
+    private static SynonymMap buildEmptySynonymMap() {
+        try {
+            return new SynonymMap.Builder().build();
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
         }
     }
 }
