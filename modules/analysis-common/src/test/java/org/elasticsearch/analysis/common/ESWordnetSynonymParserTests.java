@@ -84,7 +84,7 @@ public class ESWordnetSynonymParserTests extends ESTokenStreamTestCase {
         TestCircuitBreaker circuitBreaker = new TestCircuitBreaker();
         circuitBreaker.startBreaking();
 
-        // Circuit breaker should be called on the first rule and every 1000th rule afterward, so even a single-rule synonym set should
+        // Circuit breaker should be called on the first rule and every 1024th rule afterward, so even a single-rule synonym set should
         // be able to trip the breaker
         ESWordnetSynonymParser parser = new ESWordnetSynonymParser(true, false, true, new StandardAnalyzer(), circuitBreaker);
         String rules = """

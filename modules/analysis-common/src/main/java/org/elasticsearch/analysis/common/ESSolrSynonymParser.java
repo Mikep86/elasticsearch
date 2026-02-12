@@ -42,8 +42,8 @@ public class ESSolrSynonymParser extends SolrSynonymParser {
         // else would happen only in the case when the input or output is empty and lenient is set, in which case we
         // quietly ignore it. For more details on the control-flow see SolrSynonymParser::addInternal.
         if (lenient == false || (input.length > 0 && output.length > 0)) {
-            if (ruleCount++ % 1000 == 0) {
-                // Check the real memory usage via the parent circuit breaker every 1000 synonym rules
+            if ((ruleCount++ & 0x3FF) == 0) {
+                // Check the real memory usage via the parent circuit breaker every 1024 synonym rules
                 circuitBreaker.addEstimateBytesAndMaybeBreak(0L, "Synonyms");
             }
 
