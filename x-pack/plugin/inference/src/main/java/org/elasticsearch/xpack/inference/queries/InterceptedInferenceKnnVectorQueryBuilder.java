@@ -112,7 +112,7 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
     @Override
     protected String getQuery() {
         if (queryVectorSupplier != null) {
-            // We are in the process of rewriting a complete & valid query vector builder to generate a query vector. Return null to prevent
+            // We are in the process of rewriting a standalone query vector builder to generate a query vector. Return null to prevent
             // InferenceQueryUtils from attempting to generate inference results based on the query text.
             return null;
         }
