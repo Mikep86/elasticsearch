@@ -422,6 +422,20 @@ public abstract class AbstractInterceptedInferenceQueryBuilderTestCase<T extends
     }
 
     protected QueryRewriteContext createQueryRewriteContext(
+        List<TestIndex> testIndices,
+        Map<String, String> remoteIndexNames,
+        TransportVersion minTransportVersion,
+        Boolean ccsMinimizeRoundTrips
+    ) {
+        Map<String, Map<String, String>> localIndexInferenceFields = new HashMap<>();
+        for (TestIndex testIndex : testIndices) {
+            localIndexInferenceFields.put(testIndex.name(), testIndex.semanticTextFields());
+        }
+
+        return createQueryRewriteContext(localIndexInferenceFields, remoteIndexNames, minTransportVersion, ccsMinimizeRoundTrips);
+    }
+
+    protected QueryRewriteContext createQueryRewriteContext(
         Map<String, Map<String, String>> localIndexInferenceFields,
         Map<String, String> remoteIndexNames,
         TransportVersion minTransportVersion,

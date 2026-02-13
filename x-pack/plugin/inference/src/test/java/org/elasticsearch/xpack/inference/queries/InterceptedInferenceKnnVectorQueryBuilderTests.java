@@ -10,6 +10,7 @@ package org.elasticsearch.xpack.inference.queries;
 import org.apache.lucene.search.join.ScoreMode;
 import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.core.CheckedConsumer;
 import org.elasticsearch.index.mapper.IndexFieldMapper;
 import org.elasticsearch.index.query.BoolQueryBuilder;
 import org.elasticsearch.index.query.MatchNoneQueryBuilder;
@@ -33,10 +34,13 @@ import org.elasticsearch.xpack.core.ml.search.TokenPruningConfigTests;
 import org.elasticsearch.xpack.core.ml.vectors.TextEmbeddingQueryVectorBuilder;
 import org.elasticsearch.xpack.inference.mapper.SemanticTextField;
 
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Consumer;
 
 import static org.elasticsearch.transport.RemoteClusterAware.LOCAL_CLUSTER_GROUP_KEY;
 import static org.hamcrest.Matchers.equalTo;
@@ -301,6 +305,102 @@ public class InterceptedInferenceKnnVectorQueryBuilderTests extends AbstractInte
                 Map.of(SPARSE_INFERENCE_ID, TextExpansionResults.class)
             );
         }
+    }
+
+    public void testCoordinatorNodeRewrite_GenericQueryVectorBuilder_Success() throws Exception {
+        final String field = "test_field";
+        final TestIndex testIndex1 = new TestIndex("test-index-1", Map.of(field, DENSE_INFERENCE_ID), Map.of());
+        final TestIndex testIndex2 = new TestIndex(
+            "test-index-2",
+            Map.of(),
+            Map.of(
+                field,
+                Map.of(
+                    "type",
+                    "dense_vector",
+                    "element_type",
+                    DENSE_INFERENCE_ID_SETTINGS.elementType().toString(),
+                    "dims",
+                    DENSE_INFERENCE_ID_SETTINGS.dimensions()
+                )
+            )
+        );
+
+        final float[] expectedQueryVector = new float[DENSE_INFERENCE_ID_SETTINGS.dimensions()];
+        Arrays.fill(expectedQueryVector, 1.0f);
+
+        final KnnVectorQueryBuilder knnQuery = new KnnVectorQueryBuilder(
+            field,
+            new GenericQueryVectorBuilder(expectedQueryVector),
+            10,
+            100,
+            10f,
+            null
+        );
+
+        final CheckedConsumer<List<TestIndex>, IOException> assertQueryInferenceField = (testIndices) -> {
+            QueryRewriteContext queryRewriteContext = createQueryRewriteContext(testIndices, Map.of(), TransportVersion.current(), null);
+            QueryBuilder coordinatorRewritten = rewriteAndFetch(knnQuery, queryRewriteContext);
+
+            // Use a serialization cycle to strip InterceptedQueryBuilderWrapper
+            coordinatorRewritten = copyNamedWriteable(coordinatorRewritten, writableRegistry(), QueryBuilder.class);
+            VectorData vectorData = assertQueryIsInterceptedKnnWithValidResults(coordinatorRewritten);
+            assertThat(vectorData.floatVector(), equalTo(expectedQueryVector));
+        };
+
+        final CheckedConsumer<List<TestIndex>, IOException> assertQueryDenseVectorField = (testIndices) -> {
+            QueryRewriteContext queryRewriteContext = createQueryRewriteContext(testIndices, Map.of(), TransportVersion.current(), null);
+            QueryBuilder coordinatorRewritten = rewriteAndFetch(knnQuery, queryRewriteContext);
+
+            // Use a serialization cycle to strip InterceptedQueryBuilderWrapper
+            coordinatorRewritten = copyNamedWriteable(coordinatorRewritten, writableRegistry(), QueryBuilder.class);
+            assertThat(coordinatorRewritten, instanceOf(KnnVectorQueryBuilder.class));
+            VectorData vectorData = ((KnnVectorQueryBuilder) coordinatorRewritten).queryVector();
+            assertThat(vectorData.floatVector(), equalTo(expectedQueryVector));
+        };
+
+        assertQueryInferenceField.accept(List.of(testIndex1));
+        assertQueryInferenceField.accept(List.of(testIndex1, testIndex2));
+        assertQueryDenseVectorField.accept(List.of(testIndex2));
+    }
+
+    public void testCoordinatorNodeRewrite_GenericQueryVectorBuilder_Error() {
+        final String field = "test_field";
+        final TestIndex testIndex1 = new TestIndex("test-index-1", Map.of(field, DENSE_INFERENCE_ID), Map.of());
+        final TestIndex testIndex2 = new TestIndex(
+            "test-index-2",
+            Map.of(),
+            Map.of(
+                field,
+                Map.of(
+                    "type",
+                    "dense_vector",
+                    "element_type",
+                    DENSE_INFERENCE_ID_SETTINGS.elementType().toString(),
+                    "dims",
+                    DENSE_INFERENCE_ID_SETTINGS.dimensions()
+                )
+            )
+        );
+
+        final Exception genericQueryVectorBuilderError = new IllegalArgumentException("foo");
+        final KnnVectorQueryBuilder knnQuery = new KnnVectorQueryBuilder(
+            field,
+            new GenericQueryVectorBuilder(genericQueryVectorBuilderError),
+            10,
+            100,
+            10f,
+            null
+        );
+
+        final Consumer<List<TestIndex>> assertQuery = (testIndices) -> {
+            QueryRewriteContext queryRewriteContext = createQueryRewriteContext(testIndices, Map.of(), TransportVersion.current(), null);
+            assertThrows(genericQueryVectorBuilderError.getClass(), () -> rewriteAndFetch(knnQuery, queryRewriteContext));
+        };
+
+        assertQuery.accept(List.of(testIndex1));
+        assertQuery.accept(List.of(testIndex1, testIndex2));
+        assertQuery.accept(List.of(testIndex2));
     }
 
     @Override
