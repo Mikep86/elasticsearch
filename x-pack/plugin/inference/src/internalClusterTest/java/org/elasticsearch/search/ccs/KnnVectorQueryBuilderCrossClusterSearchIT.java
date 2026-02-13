@@ -7,23 +7,16 @@
 
 package org.elasticsearch.search.ccs;
 
-import org.elasticsearch.TransportVersion;
-import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchResponse;
-import org.elasticsearch.client.internal.Client;
-import org.elasticsearch.common.io.stream.StreamInput;
-import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import org.elasticsearch.inference.SimilarityMeasure;
 import org.elasticsearch.search.vectors.KnnVectorQueryBuilder;
-import org.elasticsearch.search.vectors.QueryVectorBuilder;
 import org.elasticsearch.search.vectors.VectorData;
-import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xpack.core.ml.vectors.TextEmbeddingQueryVectorBuilder;
+import org.elasticsearch.xpack.inference.queries.GenericQueryVectorBuilder;
 import org.junit.Before;
 
-import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -41,6 +34,10 @@ public class KnnVectorQueryBuilderCrossClusterSearchIT extends AbstractSemanticC
     private static final String REMOTE_INFERENCE_ID = "remote-inference-id";
 
     private static final int DENSE_VECTOR_FIELD_DIMENSIONS = 256;
+
+    private static final Exception GENERIC_QUERY_VECTOR_BUILDER_ERROR = new IllegalArgumentException(
+        "Generic query vector builder failure"
+    );
 
     boolean clustersConfigured = false;
 
@@ -206,8 +203,7 @@ public class KnnVectorQueryBuilderCrossClusterSearchIT extends AbstractSemanticC
                 new KnnVectorQueryBuilder(
                     DENSE_VECTOR_FIELD,
                     new GenericQueryVectorBuilder(
-                        generateDenseVectorFieldValue(DENSE_VECTOR_FIELD_DIMENSIONS, DenseVectorFieldMapper.ElementType.FLOAT, 1.0f),
-                        false
+                        generateDenseVectorFieldValue(DENSE_VECTOR_FIELD_DIMENSIONS, DenseVectorFieldMapper.ElementType.FLOAT, 1.0f)
                     ),
                     10,
                     100,
@@ -227,10 +223,7 @@ public class KnnVectorQueryBuilderCrossClusterSearchIT extends AbstractSemanticC
             assertSearchResponse(
                 new KnnVectorQueryBuilder(
                     MIXED_TYPE_FIELD_1,
-                    new GenericQueryVectorBuilder(
-                        generateDenseVectorFieldValue(384, DenseVectorFieldMapper.ElementType.FLOAT, -128.0f),
-                        false
-                    ),
+                    new GenericQueryVectorBuilder(generateDenseVectorFieldValue(384, DenseVectorFieldMapper.ElementType.FLOAT, -128.0f)),
                     10,
                     100,
                     10f,
@@ -249,10 +242,7 @@ public class KnnVectorQueryBuilderCrossClusterSearchIT extends AbstractSemanticC
             assertSearchResponse(
                 new KnnVectorQueryBuilder(
                     MIXED_TYPE_FIELD_2,
-                    new GenericQueryVectorBuilder(
-                        generateDenseVectorFieldValue(384, DenseVectorFieldMapper.ElementType.FLOAT, -128.0f),
-                        false
-                    ),
+                    new GenericQueryVectorBuilder(generateDenseVectorFieldValue(384, DenseVectorFieldMapper.ElementType.FLOAT, -128.0f)),
                     10,
                     100,
                     10f,
@@ -272,10 +262,7 @@ public class KnnVectorQueryBuilderCrossClusterSearchIT extends AbstractSemanticC
             assertSearchResponse(
                 new KnnVectorQueryBuilder(
                     COMMON_INFERENCE_ID_FIELD,
-                    new GenericQueryVectorBuilder(
-                        generateDenseVectorFieldValue(256, DenseVectorFieldMapper.ElementType.FLOAT, 1.0f),
-                        false
-                    ),
+                    new GenericQueryVectorBuilder(generateDenseVectorFieldValue(256, DenseVectorFieldMapper.ElementType.FLOAT, 1.0f)),
                     10,
                     100,
                     10f,
@@ -291,10 +278,7 @@ public class KnnVectorQueryBuilderCrossClusterSearchIT extends AbstractSemanticC
             assertSearchResponse(
                 new KnnVectorQueryBuilder(
                     COMMON_INFERENCE_ID_FIELD,
-                    new GenericQueryVectorBuilder(
-                        generateDenseVectorFieldValue(384, DenseVectorFieldMapper.ElementType.FLOAT, 1.0f),
-                        false
-                    ),
+                    new GenericQueryVectorBuilder(generateDenseVectorFieldValue(384, DenseVectorFieldMapper.ElementType.FLOAT, 1.0f)),
                     10,
                     100,
                     10f,
@@ -311,10 +295,7 @@ public class KnnVectorQueryBuilderCrossClusterSearchIT extends AbstractSemanticC
             assertSearchResponse(
                 new KnnVectorQueryBuilder(
                     VARIABLE_INFERENCE_ID_FIELD,
-                    new GenericQueryVectorBuilder(
-                        generateDenseVectorFieldValue(384, DenseVectorFieldMapper.ElementType.FLOAT, 1.0f),
-                        false
-                    ),
+                    new GenericQueryVectorBuilder(generateDenseVectorFieldValue(384, DenseVectorFieldMapper.ElementType.FLOAT, 1.0f)),
                     10,
                     100,
                     10f,
@@ -330,10 +311,7 @@ public class KnnVectorQueryBuilderCrossClusterSearchIT extends AbstractSemanticC
             assertSearchResponse(
                 new KnnVectorQueryBuilder(
                     VARIABLE_INFERENCE_ID_FIELD,
-                    new GenericQueryVectorBuilder(
-                        generateDenseVectorFieldValue(256, DenseVectorFieldMapper.ElementType.FLOAT, 1.0f),
-                        false
-                    ),
+                    new GenericQueryVectorBuilder(generateDenseVectorFieldValue(256, DenseVectorFieldMapper.ElementType.FLOAT, 1.0f)),
                     10,
                     100,
                     10f,
@@ -347,140 +325,27 @@ public class KnnVectorQueryBuilderCrossClusterSearchIT extends AbstractSemanticC
         }
     }
 
-    public void testGenericQueryVectorBuilderThrowsError() throws Exception {
+    public void testGenericQueryVectorBuilderThrowsError() {
         List<Boolean> ccsMinimizeRoundTripsValues = List.of(true, false);
+        List<String> fields = List.of(
+            DENSE_VECTOR_FIELD,
+            MIXED_TYPE_FIELD_1,
+            MIXED_TYPE_FIELD_2,
+            COMMON_INFERENCE_ID_FIELD,
+            VARIABLE_INFERENCE_ID_FIELD
+        );
+
         for (Boolean ccsMinimizeRoundTrips : ccsMinimizeRoundTripsValues) {
             final Consumer<SearchRequest> searchRequestModifier = s -> s.setCcsMinimizeRoundtrips(ccsMinimizeRoundTrips);
-
-            assertSearchFailure(
-                new KnnVectorQueryBuilder(
-                    DENSE_VECTOR_FIELD,
-                    new GenericQueryVectorBuilder(
-                        generateDenseVectorFieldValue(DENSE_VECTOR_FIELD_DIMENSIONS, DenseVectorFieldMapper.ElementType.FLOAT, 1.0f),
-                        true
-                    ),
-                    10,
-                    100,
-                    10f,
-                    null
-                ),
-                QUERY_INDICES,
-                IllegalArgumentException.class,
-                "Generic query vector builder failure",
-                searchRequestModifier
-            );
-
-            assertSearchFailure(
-                new KnnVectorQueryBuilder(
-                    MIXED_TYPE_FIELD_1,
-                    new GenericQueryVectorBuilder(
-                        generateDenseVectorFieldValue(384, DenseVectorFieldMapper.ElementType.FLOAT, -128.0f),
-                        true
-                    ),
-                    10,
-                    100,
-                    10f,
-                    null
-                ),
-                QUERY_INDICES,
-                IllegalArgumentException.class,
-                "Generic query vector builder failure",
-                searchRequestModifier
-            );
-
-            assertSearchFailure(
-                new KnnVectorQueryBuilder(
-                    MIXED_TYPE_FIELD_2,
-                    new GenericQueryVectorBuilder(
-                        generateDenseVectorFieldValue(384, DenseVectorFieldMapper.ElementType.FLOAT, -128.0f),
-                        true
-                    ),
-                    10,
-                    100,
-                    10f,
-                    null
-                ),
-                QUERY_INDICES,
-                IllegalArgumentException.class,
-                "Generic query vector builder failure",
-                searchRequestModifier
-            );
-
-            // COMMON_INFERENCE_ID_FIELD (local cluster only)
-            assertSearchFailure(
-                new KnnVectorQueryBuilder(
-                    COMMON_INFERENCE_ID_FIELD,
-                    new GenericQueryVectorBuilder(
-                        generateDenseVectorFieldValue(256, DenseVectorFieldMapper.ElementType.FLOAT, 1.0f),
-                        true
-                    ),
-                    10,
-                    100,
-                    10f,
-                    null
-                ),
-                List.of(LOCAL_INDEX_NAME),
-                IllegalArgumentException.class,
-                "Generic query vector builder failure",
-                searchRequestModifier
-            );
-
-            // COMMON_INFERENCE_ID_FIELD (remote cluster only)
-            assertSearchFailure(
-                new KnnVectorQueryBuilder(
-                    COMMON_INFERENCE_ID_FIELD,
-                    new GenericQueryVectorBuilder(
-                        generateDenseVectorFieldValue(384, DenseVectorFieldMapper.ElementType.FLOAT, 1.0f),
-                        true
-                    ),
-                    10,
-                    100,
-                    10f,
-                    null
-                ),
-                List.of(FULLY_QUALIFIED_REMOTE_INDEX_NAME),
-                IllegalArgumentException.class,
-                "Generic query vector builder failure",
-                searchRequestModifier
-            );
-
-            // VARIABLE_INFERENCE_ID_FIELD (local cluster only)
-            assertSearchFailure(
-                new KnnVectorQueryBuilder(
-                    VARIABLE_INFERENCE_ID_FIELD,
-                    new GenericQueryVectorBuilder(
-                        generateDenseVectorFieldValue(384, DenseVectorFieldMapper.ElementType.FLOAT, 1.0f),
-                        true
-                    ),
-                    10,
-                    100,
-                    10f,
-                    null
-                ),
-                List.of(LOCAL_INDEX_NAME),
-                IllegalArgumentException.class,
-                "Generic query vector builder failure",
-                searchRequestModifier
-            );
-
-            // VARIABLE_INFERENCE_ID_FIELD (remote cluster only)
-            assertSearchFailure(
-                new KnnVectorQueryBuilder(
-                    VARIABLE_INFERENCE_ID_FIELD,
-                    new GenericQueryVectorBuilder(
-                        generateDenseVectorFieldValue(256, DenseVectorFieldMapper.ElementType.FLOAT, 1.0f),
-                        true
-                    ),
-                    10,
-                    100,
-                    10f,
-                    null
-                ),
-                List.of(FULLY_QUALIFIED_REMOTE_INDEX_NAME),
-                IllegalArgumentException.class,
-                "Generic query vector builder failure",
-                searchRequestModifier
-            );
+            for (String field : fields) {
+                assertSearchFailure(
+                    new KnnVectorQueryBuilder(field, new GenericQueryVectorBuilder(GENERIC_QUERY_VECTOR_BUILDER_ERROR), 10, 100, 10f, null),
+                    QUERY_INDICES,
+                    GENERIC_QUERY_VECTOR_BUILDER_ERROR.getClass(),
+                    GENERIC_QUERY_VECTOR_BUILDER_ERROR.getMessage(),
+                    searchRequestModifier
+                );
+            }
         }
     }
 
@@ -685,56 +550,5 @@ public class KnnVectorQueryBuilderCrossClusterSearchIT extends AbstractSemanticC
 
     private static String getDocId(String field) {
         return field + "_doc";
-    }
-
-    private static class GenericQueryVectorBuilder implements QueryVectorBuilder {
-        public static final String NAME = "generic_query_vector_builder";
-
-        private final float[] queryVector;
-        private final boolean shouldThrowError;
-
-        private GenericQueryVectorBuilder(float[] queryVector, boolean shouldThrowError) {
-            this.queryVector = queryVector;
-            this.shouldThrowError = shouldThrowError;
-        }
-
-        private GenericQueryVectorBuilder(StreamInput in) throws IOException {
-            this.queryVector = in.readFloatArray();
-            this.shouldThrowError = in.readBoolean();
-        }
-
-        @Override
-        public void buildVector(Client client, ActionListener<float[]> listener) {
-            if (shouldThrowError) {
-                listener.onFailure(new IllegalArgumentException("Generic query vector builder failure"));
-            } else {
-                listener.onResponse(queryVector);
-            }
-        }
-
-        @Override
-        public String getWriteableName() {
-            return NAME;
-        }
-
-        @Override
-        public TransportVersion getMinimalSupportedVersion() {
-            return TransportVersion.current();
-        }
-
-        @Override
-        public void writeTo(StreamOutput out) throws IOException {
-            out.writeFloatArray(queryVector);
-            out.writeBoolean(shouldThrowError);
-        }
-
-        @Override
-        public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
-            builder.startObject();
-            builder.array("query_vector", queryVector);
-            builder.field("should_throw_error", shouldThrowError);
-            builder.endObject();
-            return builder;
-        }
     }
 }
