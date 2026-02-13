@@ -7,15 +7,23 @@
 
 package org.elasticsearch.search.ccs;
 
+import org.elasticsearch.TransportVersion;
+import org.elasticsearch.action.ActionListener;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchResponse;
+import org.elasticsearch.client.internal.Client;
+import org.elasticsearch.common.io.stream.StreamInput;
+import org.elasticsearch.common.io.stream.StreamOutput;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import org.elasticsearch.inference.SimilarityMeasure;
 import org.elasticsearch.search.vectors.KnnVectorQueryBuilder;
+import org.elasticsearch.search.vectors.QueryVectorBuilder;
 import org.elasticsearch.search.vectors.VectorData;
+import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xpack.core.ml.vectors.TextEmbeddingQueryVectorBuilder;
 import org.junit.Before;
 
+import java.io.IOException;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -388,5 +396,56 @@ public class KnnVectorQueryBuilderCrossClusterSearchIT extends AbstractSemanticC
 
     private static String getDocId(String field) {
         return field + "_doc";
+    }
+
+    private static class GenericQueryVectorBuilder implements QueryVectorBuilder {
+        public static final String NAME = "generic_query_vector_builder";
+
+        private final float[] queryVector;
+        private final boolean shouldThrowError;
+
+        private GenericQueryVectorBuilder(float[] queryVector, boolean shouldThrowError) {
+            this.queryVector = queryVector;
+            this.shouldThrowError = shouldThrowError;
+        }
+
+        private GenericQueryVectorBuilder(StreamInput in) throws IOException {
+            this.queryVector = in.readFloatArray();
+            this.shouldThrowError = in.readBoolean();
+        }
+
+        @Override
+        public void buildVector(Client client, ActionListener<float[]> listener) {
+            if (shouldThrowError) {
+                listener.onFailure(new IllegalArgumentException("Test failure"));
+            } else {
+                listener.onResponse(queryVector);
+            }
+        }
+
+        @Override
+        public String getWriteableName() {
+            return NAME;
+        }
+
+        @Override
+        public TransportVersion getMinimalSupportedVersion() {
+            return TransportVersion.current();
+        }
+
+        @Override
+        public void writeTo(StreamOutput out) throws IOException {
+            out.writeFloatArray(queryVector);
+            out.writeBoolean(shouldThrowError);
+        }
+
+        @Override
+        public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
+            builder.startObject();
+            builder.array("query_vector", queryVector);
+            builder.field("should_throw_error", shouldThrowError);
+            builder.endObject();
+            return builder;
+        }
     }
 }
