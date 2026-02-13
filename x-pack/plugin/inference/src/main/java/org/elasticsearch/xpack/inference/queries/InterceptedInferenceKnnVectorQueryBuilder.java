@@ -196,10 +196,26 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
         }
 
         QueryVectorBuilder queryVectorBuilder = originalQuery.queryVectorBuilder();
-        if (queryVectorBuilder != null && queryVectorBuilder.isValid()) {
-            SetOnce<float[]> newQueryVectorSupplier = new SetOnce<>();
-            QueryVectorBuilderAsyncAction.registerAction(queryRewriteContext, queryVectorBuilder, newQueryVectorSupplier);
-            return new InterceptedInferenceKnnVectorQueryBuilder(queryBuilder, originalQuery, newQueryVectorSupplier);
+        if (queryVectorBuilder != null) {
+            boolean registerAction = false;
+            if (queryVectorBuilder instanceof TextEmbeddingQueryVectorBuilder tevb) {
+                // TextEmbeddingQueryVectorBuilder is a special case. If a model ID is set, we register an action to generate
+                // the query vector. If not, the model text will be returned via getQuery() so that InferenceQueryUtils can
+                // generate the appropriate inference results for the inferred inference ID(s).
+                if (tevb.getModelId() != null) {
+                    registerAction = true;
+                }
+            } else {
+                // We register an action to generate the query vector for all other query vector builders. If they cannot, buildVector()
+                // should throw an error indicating why.
+                registerAction = true;
+            }
+
+            if (registerAction) {
+                SetOnce<float[]> newQueryVectorSupplier = new SetOnce<>();
+                QueryVectorBuilderAsyncAction.registerAction(queryRewriteContext, queryVectorBuilder, newQueryVectorSupplier);
+                return new InterceptedInferenceKnnVectorQueryBuilder(queryBuilder, originalQuery, newQueryVectorSupplier);
+            }
         }
 
         return queryBuilder;
@@ -224,8 +240,8 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
 
         // We can skip remote cluster inference info gathering if:
         // - Inference fields are queried locally, guaranteeing that the query will be intercepted
-        // - A valid query vector builder or query vector is set. In either case, remote cluster inference results are not required.
-        return inferenceFieldsQueried > 0 && (hasValidQueryVectorBuilder() || originalQuery.queryVector() != null);
+        // - A standalone query vector builder or query vector is set. In either case, remote cluster inference results are not required.
+        return inferenceFieldsQueried > 0 && (hasStandaloneQueryVectorBuilder() || originalQuery.queryVector() != null);
     }
 
     @Override
@@ -364,30 +380,26 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
         return (MlDenseEmbeddingResults) inferenceResults;
     }
 
-    private void missingInferenceIdOverrideCheck() {
-        QueryVectorBuilder queryVectorBuilder = originalQuery.queryVectorBuilder();
-        if (queryVectorBuilder instanceof TextEmbeddingQueryVectorBuilder textEmbeddingQueryVectorBuilder
-            && textEmbeddingQueryVectorBuilder.getModelId() == null) {
-            throw new IllegalArgumentException("[model_id] must not be null.");
-        }
-    }
-
     private void validateQueryVectorBuilder(boolean requireExplicitInferenceId) {
         QueryVectorBuilder queryVectorBuilder = originalQuery.queryVectorBuilder();
-        if (queryVectorBuilder instanceof TextEmbeddingQueryVectorBuilder tevb) {
-            // TextEmbeddingQueryVectorBuilder only needs validation when an explicit inference ID is required. A non-null model text value
+        if (queryVectorBuilder instanceof TextEmbeddingQueryVectorBuilder tevb && requireExplicitInferenceId) {
+            // TextEmbeddingQueryVectorBuilder needs validation when an explicit inference ID is required. A non-null model text value
             // is guaranteed by its constructor.
-            if (requireExplicitInferenceId) {
-                tevb.validate();
+            if (tevb.getModelId() == null) {
+                throw new IllegalArgumentException("[model_id] must not be null.");
             }
-        } else if (queryVectorBuilder != null) {
-            // Other query vector builder types always require validation
-            queryVectorBuilder.validate();
         }
+        // For other query vector builders, we don't validate upfront. buildVector() will throw an error if it cannot generate a vector.
     }
 
-    private boolean hasValidQueryVectorBuilder() {
+    private boolean hasStandaloneQueryVectorBuilder() {
         QueryVectorBuilder queryVectorBuilder = originalQuery.queryVectorBuilder();
-        return queryVectorBuilder != null && queryVectorBuilder.isValid();
+        if (queryVectorBuilder instanceof TextEmbeddingQueryVectorBuilder tevb) {
+            // TextEmbeddingQueryVectorBuilder is considered to be a standalone query vector builder if the model ID is set
+            return tevb.getModelId() != null;
+        }
+
+        // All other query vector builders are assumed to be standalone
+        return queryVectorBuilder != null;
     }
 }
