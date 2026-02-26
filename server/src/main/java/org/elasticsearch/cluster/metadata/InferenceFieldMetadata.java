@@ -41,7 +41,7 @@ public final class InferenceFieldMetadata implements SimpleDiffable<InferenceFie
     private static final String INFERENCE_FIELD_TYPE_FIELD = "inference_field_type";
 
     private static final TransportVersion SEMANTIC_TEXT_CHUNKING_CONFIG = TransportVersion.fromName("semantic_text_chunking_config");
-    private static final TransportVersion CLUSTER_STATE_INFERENCE_FIELD_TYPE = TransportVersion.fromString(
+    private static final TransportVersion CLUSTER_STATE_INFERENCE_FIELD_TYPE = TransportVersion.fromName(
         "cluster_state_inference_field_type"
     );
 
