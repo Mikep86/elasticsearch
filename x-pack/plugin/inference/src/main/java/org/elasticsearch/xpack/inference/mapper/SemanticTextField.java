@@ -141,12 +141,65 @@ public record SemanticTextField(
         }
     }
 
-    public record InferenceResult(
-        String inferenceId,
-        MinimalServiceSettings modelSettings,
-        ChunkingSettings chunkingSettings,
-        Map<String, List<Chunk>> chunks
-    ) {}
+    public static class InferenceResult extends org.elasticsearch.xpack.inference.mapper.InferenceResult<Chunk, InferenceResult> {
+        private final boolean useLegacyFormat;
+
+        public InferenceResult(
+            String inferenceId,
+            MinimalServiceSettings modelSettings,
+            ChunkingSettings chunkingSettings,
+            Map<String, List<Chunk>> chunks,
+            boolean useLegacyFormat
+        ) {
+            super(inferenceId, modelSettings, chunkingSettings, chunks);
+            this.useLegacyFormat = useLegacyFormat;
+        }
+
+        @Override
+        protected boolean doEquals(InferenceResult other) {
+            return useLegacyFormat == other.useLegacyFormat;
+        }
+
+        @Override
+        protected int doHashCode() {
+            return Objects.hash(useLegacyFormat);
+        }
+
+        @Override
+        public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
+            builder.startObject();
+            builder.field(INFERENCE_ID_FIELD, inferenceId);
+            builder.field(MODEL_SETTINGS_FIELD, modelSettings);
+            if (chunkingSettings != null) {
+                builder.field(CHUNKING_SETTINGS_FIELD, chunkingSettings);
+            }
+
+            if (useLegacyFormat) {
+                builder.startArray(CHUNKS_FIELD);
+            } else {
+                builder.startObject(CHUNKS_FIELD);
+            }
+            for (var entry : chunks.entrySet()) {
+                if (useLegacyFormat == false) {
+                    builder.startArray(entry.getKey());
+                }
+                for (var chunk : entry.getValue()) {
+                    chunk.toXContent(builder, params);
+                }
+                if (useLegacyFormat == false) {
+                    builder.endArray();
+                }
+            }
+            if (useLegacyFormat) {
+                builder.endArray();
+            } else {
+                builder.endObject();
+            }
+            builder.endObject();
+
+            return builder;
+        }
+    }
 
     public static String getOriginalTextFieldName(String fieldName) {
         return fieldName + "." + TEXT_FIELD;
@@ -286,12 +339,18 @@ public record SemanticTextField(
     private static final ConstructingObjectParser<InferenceResult, ParserContext> INFERENCE_RESULT_PARSER = new ConstructingObjectParser<>(
         INFERENCE_FIELD,
         true,
-        args -> {
+        (args, context) -> {
             String inferenceId = (String) args[0];
             MinimalServiceSettings modelSettings = (MinimalServiceSettings) args[1];
             Map<String, Object> chunkingSettings = (Map<String, Object>) args[2];
             Map<String, List<Chunk>> chunks = (Map<String, List<Chunk>>) args[3];
-            return new InferenceResult(inferenceId, modelSettings, ChunkingSettingsBuilder.fromMap(chunkingSettings, false), chunks);
+            return new InferenceResult(
+                inferenceId,
+                modelSettings,
+                ChunkingSettingsBuilder.fromMap(chunkingSettings, false),
+                chunks,
+                context.useLegacyFormat()
+            );
         }
     );
 

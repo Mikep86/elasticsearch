@@ -1249,7 +1249,7 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
                         useLegacyFormat,
                         name(),
                         null,
-                        new SemanticTextField.InferenceResult(inferenceId, modelSettings, chunkingSettings, chunkMap),
+                        new SemanticTextField.InferenceResult(inferenceId, modelSettings, chunkingSettings, chunkMap, useLegacyFormat),
                         source.sourceContentType()
                     )
                 );

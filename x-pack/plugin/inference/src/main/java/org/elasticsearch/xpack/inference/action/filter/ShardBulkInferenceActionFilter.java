@@ -737,7 +737,8 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                         inferenceFieldMetadata.getInferenceId(),
                         model != null ? new MinimalServiceSettings(model) : null,
                         ChunkingSettingsBuilder.fromMap(inferenceFieldMetadata.getChunkingSettings(), false),
-                        chunkMap
+                        chunkMap,
+                        useLegacyFormat
                     ),
                     indexRequest.getContentType()
                 );

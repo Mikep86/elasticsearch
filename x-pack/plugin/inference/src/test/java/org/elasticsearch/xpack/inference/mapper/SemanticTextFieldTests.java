@@ -329,7 +329,8 @@ public class SemanticTextFieldTests extends AbstractXContentTestCase<SemanticTex
                 model.getInferenceEntityId(),
                 new MinimalServiceSettings(model),
                 chunkingSettings,
-                Map.of(fieldName, chunks)
+                Map.of(fieldName, chunks),
+                useLegacyFormat
             ),
             contentType
         );

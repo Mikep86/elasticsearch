@@ -33,6 +33,22 @@ public abstract class InferenceResult<T extends InferenceChunk<T>, U extends Inf
         this.chunks = chunks;
     }
 
+    public String inferenceId() {
+        return inferenceId;
+    }
+
+    public MinimalServiceSettings modelSettings() {
+        return modelSettings;
+    }
+
+    public ChunkingSettings chunkingSettings() {
+        return chunkingSettings;
+    }
+
+    public Map<String, List<T>> chunks() {
+        return chunks;
+    }
+
     protected abstract boolean doEquals(U other);
 
     protected abstract int doHashCode();

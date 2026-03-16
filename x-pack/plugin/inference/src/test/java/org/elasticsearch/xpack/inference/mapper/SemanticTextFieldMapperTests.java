@@ -1721,7 +1721,8 @@ public class SemanticTextFieldMapperTests extends MapperTestCase {
                 randomSemanticText.inference().inferenceId(),
                 null,
                 randomSemanticText.inference().chunkingSettings(),
-                randomSemanticText.inference().chunks()
+                randomSemanticText.inference().chunks(),
+                randomSemanticText.useLegacyFormat()
             ),
             randomSemanticText.contentType()
         );
@@ -1859,7 +1860,7 @@ public class SemanticTextFieldMapperTests extends MapperTestCase {
             useLegacyFormat,
             fieldName,
             List.of(),
-            new SemanticTextField.InferenceResult(inferenceId, modelSettings, generateRandomChunkingSettings(), Map.of()),
+            new SemanticTextField.InferenceResult(inferenceId, modelSettings, generateRandomChunkingSettings(), Map.of(), useLegacyFormat),
             XContentType.JSON
         );
         XContentBuilder builder = JsonXContent.contentBuilder().startObject();
