@@ -15,13 +15,13 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
-public abstract class InferenceResult<T extends InferenceChunk<T>, U extends InferenceResult<T, U>> implements ToXContentObject {
+public abstract class AbstractInferenceResult<T extends AbstractInferenceChunk<T>, U extends AbstractInferenceResult<T, U>> implements ToXContentObject {
     protected final String inferenceId;
     protected final MinimalServiceSettings modelSettings;
     protected final ChunkingSettings chunkingSettings;
     protected final Map<String, List<T>> chunks;
 
-    public InferenceResult(
+    public AbstractInferenceResult(
         String inferenceId,
         MinimalServiceSettings modelSettings,
         ChunkingSettings chunkingSettings,

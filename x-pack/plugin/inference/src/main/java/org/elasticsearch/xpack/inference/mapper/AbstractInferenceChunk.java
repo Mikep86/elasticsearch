@@ -13,11 +13,11 @@ import org.elasticsearch.xcontent.XContentType;
 
 import java.util.Objects;
 
-public abstract class InferenceChunk<T extends InferenceChunk<T>> implements ToXContentObject {
+public abstract class AbstractInferenceChunk<T extends AbstractInferenceChunk<T>> implements ToXContentObject {
     protected final BytesReference rawEmbeddings;
     protected final XContentType contentType;
 
-    public InferenceChunk(BytesReference rawEmbeddings, XContentType contentType) {
+    public AbstractInferenceChunk(BytesReference rawEmbeddings, XContentType contentType) {
         this.rawEmbeddings = Objects.requireNonNull(rawEmbeddings);
         this.contentType = Objects.requireNonNull(contentType);
     }

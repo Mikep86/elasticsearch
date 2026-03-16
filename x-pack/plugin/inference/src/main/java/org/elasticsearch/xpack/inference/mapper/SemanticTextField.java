@@ -74,7 +74,7 @@ public record SemanticTextField(
     public static final String MODEL_SETTINGS_FIELD = "model_settings";
     static final String CHUNKING_SETTINGS_FIELD = "chunking_settings";
 
-    public static class Chunk extends InferenceChunk<Chunk> {
+    public static class Chunk extends AbstractInferenceChunk<Chunk> {
         private final String text;
         private final int startOffset;
         private final int endOffset;
@@ -141,7 +141,7 @@ public record SemanticTextField(
         }
     }
 
-    public static class InferenceResult extends org.elasticsearch.xpack.inference.mapper.InferenceResult<Chunk, InferenceResult> {
+    public static class InferenceResult extends AbstractInferenceResult<Chunk, InferenceResult> {
         private final boolean useLegacyFormat;
 
         public InferenceResult(

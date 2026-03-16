@@ -12,12 +12,12 @@ import org.elasticsearch.xcontent.XContentType;
 
 import java.util.Objects;
 
-public abstract class InferenceField<T extends InferenceResult<?, T>, U extends InferenceField<T, U>> implements ToXContentObject {
+public abstract class AbstractInferenceField<T extends AbstractInferenceResult<?, T>, U extends AbstractInferenceField<T, U>> implements ToXContentObject {
     protected final String fieldName;
     protected final T inference;
     protected final XContentType contentType;
 
-    public InferenceField(String fieldName, T inference, XContentType contentType) {
+    public AbstractInferenceField(String fieldName, T inference, XContentType contentType) {
         this.fieldName = Objects.requireNonNull(fieldName);
         this.inference = Objects.requireNonNull(inference);
         this.contentType = Objects.requireNonNull(contentType);
