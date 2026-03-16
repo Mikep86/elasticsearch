@@ -16,18 +16,18 @@ import java.util.Map;
 import java.util.Objects;
 
 public abstract class InferenceResult<T extends InferenceChunk<T>, U extends InferenceResult<T, U>> implements ToXContentObject {
-    protected final String inferenceResult;
+    protected final String inferenceId;
     protected final MinimalServiceSettings modelSettings;
     protected final ChunkingSettings chunkingSettings;
     protected final Map<String, List<T>> chunks;
 
     public InferenceResult(
-        String inferenceResult,
+        String inferenceId,
         MinimalServiceSettings modelSettings,
         ChunkingSettings chunkingSettings,
         Map<String, List<T>> chunks
     ) {
-        this.inferenceResult = inferenceResult;
+        this.inferenceId = inferenceId;
         this.modelSettings = modelSettings;
         this.chunkingSettings = chunkingSettings;
         this.chunks = chunks;
@@ -44,7 +44,7 @@ public abstract class InferenceResult<T extends InferenceChunk<T>, U extends Inf
 
         @SuppressWarnings("unchecked")
         U that = (U) o;
-        return Objects.equals(inferenceResult, that.inferenceResult)
+        return Objects.equals(inferenceId, that.inferenceId)
             && Objects.equals(modelSettings, that.modelSettings)
             && Objects.equals(chunkingSettings, that.chunkingSettings)
             && Objects.equals(chunks, that.chunks)
@@ -53,6 +53,6 @@ public abstract class InferenceResult<T extends InferenceChunk<T>, U extends Inf
 
     @Override
     public int hashCode() {
-        return Objects.hash(inferenceResult, modelSettings, chunkingSettings, chunks, doHashCode());
+        return Objects.hash(inferenceId, modelSettings, chunkingSettings, chunks, doHashCode());
     }
 }
