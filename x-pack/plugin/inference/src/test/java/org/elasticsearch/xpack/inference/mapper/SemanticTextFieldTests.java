@@ -98,7 +98,7 @@ public class SemanticTextFieldTests extends AbstractXContentTestCase<SemanticTex
                             embeddingLength,
                             expectedInstance.contentType()
                         );
-                        double[] newVector = parseDenseVector(actualChunk.rawEmbeddings(), embeddingLength, newInstance.contentType());
+                        double[] newVector = parseDenseVector(actualChunk.rawEmbeddings(), embeddingLength, actualChunk.contentType());
                         assertArrayEquals(expectedVector, newVector, 0.0000001f);
                     }
                     case SPARSE_EMBEDDING -> {
@@ -106,7 +106,7 @@ public class SemanticTextFieldTests extends AbstractXContentTestCase<SemanticTex
                             expectedChunks.get(i).rawEmbeddings(),
                             expectedInstance.contentType()
                         );
-                        List<WeightedToken> newTokens = parseWeightedTokens(actualChunk.rawEmbeddings(), newInstance.contentType());
+                        List<WeightedToken> newTokens = parseWeightedTokens(actualChunk.rawEmbeddings(), actualChunk.contentType());
                         assertThat(newTokens, equalTo(expectedTokens));
                     }
                     default -> throw new AssertionError("Invalid task type " + modelSettings.taskType());
@@ -413,7 +413,7 @@ public class SemanticTextFieldTests extends AbstractXContentTestCase<SemanticTex
                     for (var entryChunk : entryChunks) {
                         String matchedText = matchedTextIt.next();
                         ChunkedInference.TextOffset offset = createOffset(useLegacyFormat, entryChunk, matchedText);
-                        double[] values = parseDenseVector(entryChunk.rawEmbeddings(), embeddingLength, field.contentType());
+                        double[] values = parseDenseVector(entryChunk.rawEmbeddings(), embeddingLength, entryChunk.contentType());
                         EmbeddingResults.Embedding<?> embedding = switch (elementType) {
                             case FLOAT, BFLOAT16 -> new DenseEmbeddingFloatResults.Embedding(FloatConversionUtils.floatArrayOf(values));
                             case BYTE, BIT -> new DenseEmbeddingByteResults.Embedding(byteArrayOf(values));

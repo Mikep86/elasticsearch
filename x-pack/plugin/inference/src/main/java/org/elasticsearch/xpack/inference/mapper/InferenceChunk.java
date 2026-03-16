@@ -22,6 +22,14 @@ public abstract class InferenceChunk<T extends InferenceChunk<T>> implements ToX
         this.contentType = Objects.requireNonNull(contentType);
     }
 
+    public BytesReference rawEmbeddings() {
+        return rawEmbeddings;
+    }
+
+    public XContentType contentType() {
+        return contentType;
+    }
+
     protected abstract boolean doEquals(T other);
 
     protected abstract int doHashCode();

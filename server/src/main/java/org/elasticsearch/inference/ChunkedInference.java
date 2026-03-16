@@ -11,6 +11,7 @@ package org.elasticsearch.inference;
 
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.xcontent.XContent;
+import org.elasticsearch.xcontent.XContentType;
 
 import java.io.IOException;
 import java.util.Iterator;
@@ -30,8 +31,9 @@ public interface ChunkedInference {
      * A chunk of inference results containing the substring location in the original text and the bytes reference.
      * @param textOffset
      * @param bytesReference
+     * @param contentType
      */
-    record Chunk(TextOffset textOffset, BytesReference bytesReference) {}
+    record Chunk(TextOffset textOffset, BytesReference bytesReference, XContentType contentType) {}
 
     record TextOffset(int start, int end) {}
 }

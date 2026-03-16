@@ -37,6 +37,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import static org.elasticsearch.xcontent.ConstructingObjectParser.constructorArg;
 import static org.elasticsearch.xcontent.ConstructingObjectParser.optionalConstructorArg;
@@ -73,14 +74,79 @@ public record SemanticTextField(
     public static final String MODEL_SETTINGS_FIELD = "model_settings";
     static final String CHUNKING_SETTINGS_FIELD = "chunking_settings";
 
+    public static class Chunk extends InferenceChunk<Chunk> {
+        private final String text;
+        private final int startOffset;
+        private final int endOffset;
+        private final boolean useLegacyFormat;
+
+        public Chunk(
+            @Nullable String text,
+            int startOffset,
+            int endOffset,
+            boolean useLegacyFormat,
+            BytesReference rawEmbeddings,
+            XContentType contentType
+        ) {
+            super(rawEmbeddings, contentType);
+            this.text = text;
+            this.startOffset = startOffset;
+            this.endOffset = endOffset;
+            this.useLegacyFormat = useLegacyFormat;
+        }
+
+        public String text() {
+            return text;
+        }
+
+        public int startOffset() {
+            return startOffset;
+        }
+
+        public int endOffset() {
+            return endOffset;
+        }
+
+        public boolean useLegacyFormat() {
+            return useLegacyFormat;
+        }
+
+        @Override
+        protected boolean doEquals(Chunk other) {
+            return Objects.equals(text, other.text)
+                && startOffset == other.startOffset
+                && endOffset == other.endOffset
+                && useLegacyFormat == other.useLegacyFormat;
+        }
+
+        @Override
+        protected int doHashCode() {
+            return Objects.hash(text, startOffset, endOffset, useLegacyFormat);
+        }
+
+        @Override
+        public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
+            builder.startObject();
+            if (useLegacyFormat) {
+                builder.field(TEXT_FIELD, text);
+            } else {
+                builder.field(CHUNKED_START_OFFSET_FIELD, startOffset);
+                builder.field(CHUNKED_END_OFFSET_FIELD, endOffset);
+            }
+            XContentParser parser = XContentHelper.createParserNotCompressed(XContentParserConfiguration.EMPTY, rawEmbeddings, contentType);
+            builder.field(CHUNKED_EMBEDDINGS_FIELD).copyCurrentStructure(parser);
+            builder.endObject();
+
+            return builder;
+        }
+    }
+
     public record InferenceResult(
         String inferenceId,
         MinimalServiceSettings modelSettings,
         ChunkingSettings chunkingSettings,
         Map<String, List<Chunk>> chunks
     ) {}
-
-    public record Chunk(@Nullable String text, int startOffset, int endOffset, BytesReference rawEmbeddings) {}
 
     public static String getOriginalTextFieldName(String fieldName) {
         return fieldName + "." + TEXT_FIELD;
@@ -237,7 +303,14 @@ public record SemanticTextField(
             if (context.useLegacyFormat() && text == null) {
                 throw new IllegalArgumentException("Missing chunk text");
             }
-            return new Chunk(text, args[1] != null ? (int) args[1] : -1, args[2] != null ? (int) args[2] : -1, (BytesReference) args[3]);
+            return new Chunk(
+                text,
+                args[1] != null ? (int) args[1] : -1,
+                args[2] != null ? (int) args[2] : -1,
+                context.useLegacyFormat(),
+                (BytesReference) args[3],
+                context.xContentType()
+            );
         }
     );
 
@@ -316,10 +389,9 @@ public record SemanticTextField(
      * Converts the provided {@link ChunkedInference} into a list of {@link Chunk}.
      */
     public static Chunk toSemanticTextFieldChunk(int offsetAdjustment, ChunkedInference.Chunk chunk) {
-        String text = null;
         int startOffset = chunk.textOffset().start() + offsetAdjustment;
         int endOffset = chunk.textOffset().end() + offsetAdjustment;
-        return new Chunk(text, startOffset, endOffset, chunk.bytesReference());
+        return new Chunk(null, startOffset, endOffset, false, chunk.bytesReference(), chunk.contentType());
     }
 
     public static List<Chunk> toSemanticTextFieldChunksLegacy(String input, ChunkedInference results, XContentType contentType)
@@ -332,8 +404,8 @@ public record SemanticTextField(
         return chunks;
     }
 
-    public static Chunk toSemanticTextFieldChunkLegacy(String input, org.elasticsearch.inference.ChunkedInference.Chunk chunk) {
+    public static Chunk toSemanticTextFieldChunkLegacy(String input, ChunkedInference.Chunk chunk) {
         var text = input.substring(chunk.textOffset().start(), chunk.textOffset().end());
-        return new Chunk(text, -1, -1, chunk.bytesReference());
+        return new Chunk(text, -1, -1, true, chunk.bytesReference(), chunk.contentType());
     }
 }

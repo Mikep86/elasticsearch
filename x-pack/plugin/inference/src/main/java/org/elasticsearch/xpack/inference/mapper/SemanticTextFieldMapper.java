@@ -1233,7 +1233,9 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
                             null,
                             offset.start(),
                             offset.end(),
-                            rawEmbeddings(fieldLoader::write, source.sourceContentType())
+                            useLegacyFormat,
+                            rawEmbeddings(fieldLoader::write, source.sourceContentType()),
+                            source.sourceContentType()
                         )
                     );
                 });
