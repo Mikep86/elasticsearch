@@ -25,6 +25,18 @@ public abstract class AbstractInferenceField<T extends AbstractInferenceResult<?
         this.contentType = Objects.requireNonNull(contentType);
     }
 
+    public String fieldName() {
+        return fieldName;
+    }
+
+    public T inference() {
+        return inference;
+    }
+
+    public XContentType contentType() {
+        return contentType;
+    }
+
     protected abstract boolean doEquals(U other);
 
     protected abstract int doHashCode();

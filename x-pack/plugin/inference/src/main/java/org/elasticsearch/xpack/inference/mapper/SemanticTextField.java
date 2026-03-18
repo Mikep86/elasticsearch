@@ -13,7 +13,6 @@ import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.common.xcontent.XContentParserUtils;
 import org.elasticsearch.common.xcontent.support.XContentMapValues;
 import org.elasticsearch.core.Nullable;
-import org.elasticsearch.index.IndexVersions;
 import org.elasticsearch.inference.ChunkedInference;
 import org.elasticsearch.inference.ChunkingSettings;
 import org.elasticsearch.inference.MinimalServiceSettings;
@@ -46,20 +45,8 @@ import static org.elasticsearch.xcontent.ConstructingObjectParser.optionalConstr
  * A {@link ToXContentObject} that is used to represent the transformation of the semantic text field's inputs.
  * The resulting object preserves the original input under the {@link SemanticTextField#TEXT_FIELD} and exposes
  * the inference results under the {@link SemanticTextField#INFERENCE_FIELD}.
- *
- * @param fieldName The original field name.
- * @param originalValues The original values associated with the field name for indices created before
- *                       {@link IndexVersions#INFERENCE_METADATA_FIELDS}, null otherwise.
- * @param inference The inference result.
- * @param contentType The {@link XContentType} used to store the embeddings chunks.
  */
-public record SemanticTextField(
-    boolean useLegacyFormat,
-    String fieldName,
-    @Nullable List<String> originalValues,
-    InferenceResult inference,
-    XContentType contentType
-) implements ToXContentObject {
+public class SemanticTextField extends AbstractInferenceField<SemanticTextField.InferenceResult, SemanticTextField> {
 
     static final String TEXT_FIELD = "text";
     static final String INFERENCE_FIELD = "inference";
@@ -201,6 +188,39 @@ public record SemanticTextField(
         }
     }
 
+    private final boolean useLegacyFormat;
+    private final List<String> originalValues;
+
+    public SemanticTextField(
+        boolean useLegacyFormat,
+        String fieldName,
+        @Nullable List<String> originalValues,
+        InferenceResult inference,
+        XContentType contentType
+    ) {
+        super(fieldName, inference, contentType);
+        this.useLegacyFormat = useLegacyFormat;
+        this.originalValues = originalValues;
+    }
+
+    public boolean useLegacyFormat() {
+        return useLegacyFormat;
+    }
+
+    public List<String> originalValues() {
+        return originalValues != null ? originalValues : Collections.emptyList();
+    }
+
+    @Override
+    protected boolean doEquals(SemanticTextField other) {
+        return useLegacyFormat == other.useLegacyFormat && Objects.equals(originalValues, other.originalValues);
+    }
+
+    @Override
+    protected int doHashCode() {
+        return Objects.hash(useLegacyFormat, originalValues);
+    }
+
     public static String getOriginalTextFieldName(String fieldName) {
         return fieldName + "." + TEXT_FIELD;
     }
@@ -258,59 +278,13 @@ public record SemanticTextField(
     }
 
     @Override
-    public List<String> originalValues() {
-        return originalValues != null ? originalValues : Collections.emptyList();
-    }
-
-    @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
         builder.startObject();
         List<String> originalValues = originalValues();
         if (useLegacyFormat && originalValues.isEmpty() == false) {
             builder.field(TEXT_FIELD, originalValues.size() == 1 ? originalValues.get(0) : originalValues);
         }
-        builder.startObject(INFERENCE_FIELD);
-        builder.field(INFERENCE_ID_FIELD, inference.inferenceId);
-        builder.field(MODEL_SETTINGS_FIELD, inference.modelSettings);
-        if (inference.chunkingSettings != null) {
-            builder.field(CHUNKING_SETTINGS_FIELD, inference.chunkingSettings);
-        }
-
-        if (useLegacyFormat) {
-            builder.startArray(CHUNKS_FIELD);
-        } else {
-            builder.startObject(CHUNKS_FIELD);
-        }
-        for (var entry : inference.chunks.entrySet()) {
-            if (useLegacyFormat == false) {
-                builder.startArray(entry.getKey());
-            }
-            for (var chunk : entry.getValue()) {
-                builder.startObject();
-                if (useLegacyFormat) {
-                    builder.field(TEXT_FIELD, chunk.text);
-                } else {
-                    builder.field(CHUNKED_START_OFFSET_FIELD, chunk.startOffset);
-                    builder.field(CHUNKED_END_OFFSET_FIELD, chunk.endOffset);
-                }
-                XContentParser parser = XContentHelper.createParserNotCompressed(
-                    XContentParserConfiguration.EMPTY,
-                    chunk.rawEmbeddings,
-                    contentType
-                );
-                builder.field(CHUNKED_EMBEDDINGS_FIELD).copyCurrentStructure(parser);
-                builder.endObject();
-            }
-            if (useLegacyFormat == false) {
-                builder.endArray();
-            }
-        }
-        if (useLegacyFormat) {
-            builder.endArray();
-        } else {
-            builder.endObject();
-        }
-        builder.endObject();
+        builder.field(INFERENCE_FIELD, inference);
         builder.endObject();
         return builder;
     }
