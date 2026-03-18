@@ -43,8 +43,6 @@ import org.elasticsearch.index.mapper.BlockSourceReader;
 import org.elasticsearch.index.mapper.DocumentParserContext;
 import org.elasticsearch.index.mapper.DocumentParsingException;
 import org.elasticsearch.index.mapper.FieldMapper;
-import org.elasticsearch.index.mapper.IndexType;
-import org.elasticsearch.index.mapper.InferenceFieldMapper;
 import org.elasticsearch.index.mapper.InferenceMetadataFieldsMapper;
 import org.elasticsearch.index.mapper.KeywordFieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
@@ -56,7 +54,6 @@ import org.elasticsearch.index.mapper.MappingLookup;
 import org.elasticsearch.index.mapper.MappingParserContext;
 import org.elasticsearch.index.mapper.NestedObjectMapper;
 import org.elasticsearch.index.mapper.ObjectMapper;
-import org.elasticsearch.index.mapper.SimpleMappedFieldType;
 import org.elasticsearch.index.mapper.SourceLoader;
 import org.elasticsearch.index.mapper.SourceValueFetcher;
 import org.elasticsearch.index.mapper.TextFieldMapper;
@@ -129,7 +126,7 @@ import static org.elasticsearch.xpack.inference.services.elasticsearch.Elasticse
 /**
  * A {@link FieldMapper} for semantic text fields.
  */
-public class SemanticTextFieldMapper extends FieldMapper implements InferenceFieldMapper {
+public class SemanticTextFieldMapper extends AbstractInferenceFieldMapper {
     private static final Logger logger = LogManager.getLogger(SemanticTextFieldMapper.class);
 
     public static final NodeFeature SEMANTIC_TEXT_IN_OBJECT_FIELD_FIX = new NodeFeature("semantic_text.in_object_field_fix");
@@ -612,9 +609,6 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
 
     }
 
-    private final ModelRegistry modelRegistry;
-    private final List<VectorsFormatProvider> vectorsFormatProviders;
-
     private SemanticTextFieldMapper(
         String simpleName,
         MappedFieldType mappedFieldType,
@@ -622,10 +616,8 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
         ModelRegistry modelRegistry,
         List<VectorsFormatProvider> vectorsFormatProviders
     ) {
-        super(simpleName, mappedFieldType, builderParams);
+        super(simpleName, mappedFieldType, builderParams, modelRegistry, vectorsFormatProviders);
         ensureMultiFields(builderParams.multiFields().iterator());
-        this.modelRegistry = modelRegistry;
-        this.vectorsFormatProviders = vectorsFormatProviders;
     }
 
     private void ensureMultiFields(Iterator<FieldMapper> mappers) {
@@ -678,13 +670,19 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
             return;
         }
 
-        final SemanticTextField field = parseSemanticTextField(context);
-        if (field != null) {
-            parseCreateFieldFromContext(context, field, xContentLocation);
+        parseInferenceField(context);
+    }
+
+    @Override
+    void parseInferenceField(DocumentParserContext context) throws IOException {
+        XContentLocation xContentLocation = context.parser().getTokenLocation();
+        var input = parseSemanticTextField(context);
+        if (input != null) {
+            parseCreateFieldFromContext(context, input, xContentLocation);
         }
     }
 
-    SemanticTextField parseSemanticTextField(DocumentParserContext context) throws IOException {
+    private SemanticTextField parseSemanticTextField(DocumentParserContext context) throws IOException {
         XContentParser parser = context.parser();
         if (parser.currentToken() == XContentParser.Token.VALUE_NULL) {
             return null;
@@ -718,7 +716,7 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
         return semanticTextField;
     }
 
-    void parseCreateFieldFromContext(DocumentParserContext context, SemanticTextField field, XContentLocation xContentLocation)
+    private void parseCreateFieldFromContext(DocumentParserContext context, SemanticTextField field, XContentLocation xContentLocation)
         throws IOException {
         final String fullFieldName = fieldType().name();
         if (field.inference().inferenceId().equals(fieldType().getInferenceId()) == false) {
@@ -880,13 +878,9 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
         }
     }
 
-    public static class SemanticTextFieldType extends SimpleMappedFieldType {
-        private final String inferenceId;
-        private final String searchInferenceId;
-        private final MinimalServiceSettings modelSettings;
+    public static class SemanticTextFieldType extends AbstractInferenceFieldType {
         private final ChunkingSettings chunkingSettings;
         private final SemanticTextIndexOptions indexOptions;
-        private final ObjectMapper inferenceField;
         private final boolean useLegacyFormat;
 
         public SemanticTextFieldType(
@@ -900,13 +894,9 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
             boolean useLegacyFormat,
             Map<String, String> meta
         ) {
-            super(name, IndexType.terms(true, false), false, meta);
-            this.inferenceId = inferenceId;
-            this.searchInferenceId = searchInferenceId;
-            this.modelSettings = modelSettings;
+            super(name, inferenceId, searchInferenceId, modelSettings, inferenceField, meta);
             this.chunkingSettings = chunkingSettings;
             this.indexOptions = indexOptions;
-            this.inferenceField = inferenceField;
             this.useLegacyFormat = useLegacyFormat;
         }
 
@@ -929,24 +919,8 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
             return SemanticTextHighlighter.NAME;
         }
 
-        public String getInferenceId() {
-            return inferenceId;
-        }
-
-        public String getSearchInferenceId() {
-            return searchInferenceId == null ? inferenceId : searchInferenceId;
-        }
-
-        public MinimalServiceSettings getModelSettings() {
-            return modelSettings;
-        }
-
         public ChunkingSettings getChunkingSettings() {
             return chunkingSettings;
-        }
-
-        public ObjectMapper getInferenceField() {
-            return inferenceField;
         }
 
         public NestedObjectMapper getChunksField() {
@@ -959,11 +933,6 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
 
         public FieldMapper getOffsetsField() {
             return (FieldMapper) getChunksField().getMapper(CHUNKED_OFFSET_FIELD);
-        }
-
-        @Override
-        public Query termQuery(Object value, SearchExecutionContext context) {
-            throw new IllegalArgumentException(CONTENT_TYPE + " fields do not support term query");
         }
 
         @Override

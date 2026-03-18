@@ -7,6 +7,7 @@
 
 package org.elasticsearch.xpack.inference.mapper;
 
+import org.apache.lucene.search.Query;
 import org.elasticsearch.index.mapper.DocumentParserContext;
 import org.elasticsearch.index.mapper.FieldMapper;
 import org.elasticsearch.index.mapper.IndexType;
@@ -15,6 +16,7 @@ import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.ObjectMapper;
 import org.elasticsearch.index.mapper.SimpleMappedFieldType;
 import org.elasticsearch.index.mapper.vectors.VectorsFormatProvider;
+import org.elasticsearch.index.query.SearchExecutionContext;
 import org.elasticsearch.inference.MinimalServiceSettings;
 import org.elasticsearch.xpack.inference.registry.ModelRegistry;
 
@@ -41,10 +43,10 @@ public abstract class AbstractInferenceFieldMapper extends FieldMapper implement
     abstract void parseInferenceField(DocumentParserContext context) throws IOException;
 
     public abstract static class AbstractInferenceFieldType extends SimpleMappedFieldType {
-        private final String inferenceId;
-        private final String searchInferenceId;
-        private final MinimalServiceSettings modelSettings;
-        private final ObjectMapper inferenceField;
+        protected final String inferenceId;
+        protected final String searchInferenceId;
+        protected final MinimalServiceSettings modelSettings;
+        protected final ObjectMapper inferenceField;
 
         public AbstractInferenceFieldType(
             String name,
@@ -66,7 +68,7 @@ public abstract class AbstractInferenceFieldMapper extends FieldMapper implement
         }
 
         public String getSearchInferenceId() {
-            return searchInferenceId;
+            return searchInferenceId == null ? inferenceId : searchInferenceId;
         }
 
         public MinimalServiceSettings getModelSettings() {
@@ -75,6 +77,11 @@ public abstract class AbstractInferenceFieldMapper extends FieldMapper implement
 
         public ObjectMapper getInferenceField() {
             return inferenceField;
+        }
+
+        @Override
+        public Query termQuery(Object value, SearchExecutionContext context) {
+            throw new IllegalArgumentException(typeName() + " fields do not support term query");
         }
     }
 }

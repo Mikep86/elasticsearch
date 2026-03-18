@@ -23,7 +23,6 @@ import org.elasticsearch.index.query.QueryShardException;
 import org.elasticsearch.index.query.SearchExecutionContext;
 import org.elasticsearch.search.fetch.StoredFieldsSpec;
 import org.elasticsearch.search.lookup.Source;
-import org.elasticsearch.xcontent.XContentLocation;
 import org.elasticsearch.xcontent.XContentParser;
 
 import java.io.IOException;
@@ -142,16 +141,10 @@ public class SemanticInferenceMetadataFieldsMapper extends InferenceMetadataFiel
                 String[] fieldNameParts = fieldName.split("\\.");
                 setPath(context.path(), fieldNameParts);
                 var mapper = context.mappingLookup().getMapper(fieldName);
-                if (mapper instanceof SemanticTextFieldMapper fieldMapper) {
-                    XContentLocation xContentLocation = context.parser().getTokenLocation();
-                    var input = fieldMapper.parseSemanticTextField(context);
-                    if (input != null) {
-                        fieldMapper.parseCreateFieldFromContext(context, input, xContentLocation);
-                    }
+                if (mapper instanceof AbstractInferenceFieldMapper inferenceFieldMapper) {
+                    inferenceFieldMapper.parseInferenceField(context);
                 } else {
-                    throw new IllegalArgumentException(
-                        "Field [" + fieldName + "] is not a [" + SemanticTextFieldMapper.CONTENT_TYPE + "] field"
-                    );
+                    throw new IllegalArgumentException("Field [" + fieldName + "] is not an inference field");
                 }
             }
         } finally {
