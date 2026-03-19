@@ -8,6 +8,7 @@
 package org.elasticsearch.xpack.inference.action.filter;
 
 import org.elasticsearch.cluster.metadata.InferenceFieldMetadata;
+import org.elasticsearch.cluster.metadata.InferenceFieldType;
 import org.elasticsearch.xpack.inference.mapper.AbstractInferenceField;
 
 import java.util.List;
@@ -26,4 +27,11 @@ interface InferenceFieldIngest {
         InferenceFieldMetadata inferenceFieldMetadata,
         List<ShardBulkInferenceActionFilter.FieldInferenceResponse> responses
     );
+
+    static InferenceFieldIngest get(InferenceFieldType inferenceFieldType) {
+        return switch (inferenceFieldType) {
+            case SEMANTIC_TEXT -> new SemanticTextFieldIngest();
+            default -> throw new IllegalStateException("Unsupported inference field type [" + inferenceFieldType.getTypeName() + "]");
+        };
+    }
 }

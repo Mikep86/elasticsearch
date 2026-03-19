@@ -68,7 +68,6 @@ import org.elasticsearch.xpack.inference.InferenceException;
 import org.elasticsearch.xpack.inference.InferenceLicenceCheck;
 import org.elasticsearch.xpack.inference.mapper.SemanticTextField;
 import org.elasticsearch.xpack.inference.mapper.SemanticTextFieldMapper;
-import org.elasticsearch.xpack.inference.mapper.SemanticTextUtils;
 import org.elasticsearch.xpack.inference.registry.ModelRegistry;
 
 import java.io.IOException;
@@ -537,100 +536,25 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                 return 0;
             }
 
-            final Map<String, Object> docMap = indexRequest.getIndexRequest().sourceAsMap();
             long inputLength = 0;
             for (var entry : fieldInferenceMap.values()) {
-                String field = entry.getName();
-                String inferenceId = entry.getInferenceId();
-                ChunkingSettings chunkingSettings = ChunkingSettingsBuilder.fromMap(entry.getChunkingSettings(), false);
+                final InferenceFieldIngest inferenceFieldIngest = InferenceFieldIngest.get(entry.getInferenceFieldType());
 
-                if (useLegacyFormat) {
-                    var originalFieldValue = XContentMapValues.extractValue(field, docMap);
-                    if (originalFieldValue instanceof Map || (originalFieldValue == null && entry.getSourceFields().length == 1)) {
-                        // Inference has already been computed, or there is no inference required.
-                        continue;
-                    }
-                } else {
-                    var inferenceMetadataFieldsValue = XContentMapValues.extractValue(
-                        InferenceMetadataFieldsMapper.NAME + "." + field,
-                        docMap,
-                        EXPLICIT_NULL
-                    );
-                    if (inferenceMetadataFieldsValue != null) {
-                        // Inference has already been computed
-                        continue;
-                    }
-                }
-
-                int order = 0;
-                for (var sourceField : entry.getSourceFields()) {
-                    var valueObj = XContentMapValues.extractValue(sourceField, docMap, EXPLICIT_NULL);
-                    if (useLegacyFormat == false && isUpdateRequest && valueObj == EXPLICIT_NULL) {
-                        /**
-                         * It's an update request, and the source field is explicitly set to null,
-                         * so we need to propagate this information to the inference fields metadata
-                         * to overwrite any inference previously computed on the field.
-                         * This ensures that the field is treated as intentionally cleared,
-                         * preventing any unintended carryover of prior inference results.
-                         */
-                        if (incrementIndexingPressurePreInference(indexRequest, itemIndex) == false) {
-                            return inputLength;
-                        }
-
-                        var slot = ensureResponseAccumulatorSlot(itemIndex);
-                        slot.addOrUpdateResponse(
-                            new FieldInferenceResponse(field, sourceField, null, order++, 0, null, EMPTY_CHUNKED_INFERENCE)
-                        );
-                        continue;
-                    }
-                    if (valueObj == null || valueObj == EXPLICIT_NULL) {
-                        if (isUpdateRequest && useLegacyFormat) {
-                            setInferenceResponseFailure(
-                                itemIndex,
-                                new ElasticsearchStatusException(
-                                    "Field [{}] must be specified on an update request to calculate inference for field [{}]",
-                                    RestStatus.BAD_REQUEST,
-                                    sourceField,
-                                    field
-                                )
-                            );
-                            break;
-                        }
-                        continue;
+                final String inferenceId = entry.getInferenceId();
+                final List<FieldInferenceRequest> newRequests = inferenceFieldIngest.generateFieldInferenceRequests(
+                    this,
+                    entry,
+                    indexRequest,
+                    itemIndex,
+                    isUpdateRequest
+                );
+                if (newRequests.isEmpty() == false) {
+                    for (var request : newRequests) {
+                        inputLength += request.input().length();
                     }
 
-                    var slot = ensureResponseAccumulatorSlot(itemIndex);
-                    final List<String> values;
-                    try {
-                        values = SemanticTextUtils.nodeStringValues(field, valueObj);
-                    } catch (Exception exc) {
-                        setInferenceResponseFailure(itemIndex, exc);
-                        break;
-                    }
-
-                    List<FieldInferenceRequest> requests = requestsMap.computeIfAbsent(inferenceId, k -> new ArrayList<>());
-                    int offsetAdjustment = 0;
-                    for (String v : values) {
-                        if (incrementIndexingPressurePreInference(indexRequest, itemIndex) == false) {
-                            return inputLength;
-                        }
-
-                        if (v.isBlank()) {
-                            slot.addOrUpdateResponse(
-                                new FieldInferenceResponse(field, sourceField, v, order++, 0, null, EMPTY_CHUNKED_INFERENCE)
-                            );
-                        } else {
-                            requests.add(
-                                new FieldInferenceRequest(itemIndex, field, sourceField, v, order++, offsetAdjustment, chunkingSettings)
-                            );
-                            inputLength += v.length();
-                        }
-
-                        // When using the inference metadata fields format, all the input values are concatenated so that the
-                        // chunk text offsets are expressed in the context of a single string. Calculate the offset adjustment
-                        // to apply to account for this.
-                        offsetAdjustment += v.length() + 1; // Add one for separator char length
-                    }
+                    List<FieldInferenceRequest> existingRequests = requestsMap.computeIfAbsent(inferenceId, k -> new ArrayList<>());
+                    existingRequests.addAll(newRequests);
                 }
             }
 
