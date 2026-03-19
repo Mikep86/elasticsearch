@@ -48,7 +48,6 @@ import org.elasticsearch.inference.InferenceServiceRegistry;
 import org.elasticsearch.inference.InferenceString;
 import org.elasticsearch.inference.InferenceStringGroup;
 import org.elasticsearch.inference.InputType;
-import org.elasticsearch.inference.MinimalServiceSettings;
 import org.elasticsearch.inference.Model;
 import org.elasticsearch.inference.UnparsedModel;
 import org.elasticsearch.inference.telemetry.InferenceStats;
@@ -62,10 +61,10 @@ import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentParser;
 import org.elasticsearch.xcontent.XContentParserConfiguration;
 import org.elasticsearch.xcontent.XContentType;
-import org.elasticsearch.xpack.core.inference.chunking.ChunkingSettingsBuilder;
 import org.elasticsearch.xpack.core.inference.results.ChunkedInferenceError;
 import org.elasticsearch.xpack.inference.InferenceException;
 import org.elasticsearch.xpack.inference.InferenceLicenceCheck;
+import org.elasticsearch.xpack.inference.mapper.AbstractInferenceField;
 import org.elasticsearch.xpack.inference.mapper.SemanticTextField;
 import org.elasticsearch.xpack.inference.mapper.SemanticTextFieldMapper;
 import org.elasticsearch.xpack.inference.registry.ModelRegistry;
@@ -76,7 +75,6 @@ import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.Iterator;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
@@ -84,8 +82,6 @@ import java.util.stream.Collectors;
 
 import static java.util.Collections.singletonList;
 import static org.elasticsearch.inference.telemetry.InferenceStats.serviceAndResponseAttributes;
-import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.toSemanticTextFieldChunks;
-import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.toSemanticTextFieldChunksLegacy;
 
 /**
  * A {@link MappedActionFilter} that intercepts {@link BulkShardRequest} to apply inference on fields specified
@@ -638,7 +634,6 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
             for (var entry : response.responses.entrySet()) {
                 var fieldName = entry.getKey();
                 var responses = entry.getValue();
-                Model model = null;
 
                 InferenceFieldMetadata inferenceFieldMetadata = fieldInferenceMap.get(fieldName);
                 if (inferenceFieldMetadata == null) {
@@ -647,40 +642,15 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
 
                 // ensure that the order in the original field is consistent in case of multiple inputs
                 Collections.sort(responses, Comparator.comparingInt(FieldInferenceResponse::inputOrder));
-                Map<String, List<SemanticTextField.Chunk>> chunkMap = new LinkedHashMap<>();
-                for (var resp : responses) {
-                    // Get the first non-null model from the response list
-                    if (model == null) {
-                        model = resp.model;
-                    }
 
-                    var lst = chunkMap.computeIfAbsent(resp.sourceField, k -> new ArrayList<>());
-                    var chunks = useLegacyFormat
-                        ? toSemanticTextFieldChunksLegacy(resp.input, resp.chunkedResults, indexRequest.getContentType())
-                        : toSemanticTextFieldChunks(resp.offsetAdjustment, resp.chunkedResults, indexRequest.getContentType());
-                    lst.addAll(chunks);
-                }
-
-                List<String> inputs = useLegacyFormat
-                    ? responses.stream().filter(r -> r.sourceField().equals(fieldName)).map(r -> r.input).collect(Collectors.toList())
-                    : null;
-
-                // The model can be null if we are only processing update requests that clear inference results. This is ok because we will
-                // merge in the field's existing model settings on the data node.
-                var result = new SemanticTextField(
-                    useLegacyFormat,
-                    fieldName,
-                    inputs,
-                    new SemanticTextField.InferenceResult(
-                        inferenceFieldMetadata.getInferenceId(),
-                        model != null ? new MinimalServiceSettings(model) : null,
-                        ChunkingSettingsBuilder.fromMap(inferenceFieldMetadata.getChunkingSettings(), false),
-                        chunkMap,
-                        useLegacyFormat
-                    ),
+                InferenceFieldIngest inferenceFieldIngest = InferenceFieldIngest.get(inferenceFieldMetadata.getInferenceFieldType());
+                AbstractInferenceField<?, ?> inferenceField = inferenceFieldIngest.processInferenceResponses(
+                    this,
+                    inferenceFieldMetadata,
+                    responses,
                     indexRequest.getContentType()
                 );
-                inferenceFieldsMap.put(fieldName, result);
+                inferenceFieldsMap.put(fieldName, inferenceField);
             }
 
             updateIndexSource(item, inferenceFieldsMap);

@@ -9,8 +9,10 @@ package org.elasticsearch.xpack.inference.action.filter;
 
 import org.elasticsearch.cluster.metadata.InferenceFieldMetadata;
 import org.elasticsearch.cluster.metadata.InferenceFieldType;
+import org.elasticsearch.xcontent.XContentType;
 import org.elasticsearch.xpack.inference.mapper.AbstractInferenceField;
 
+import java.io.IOException;
 import java.util.List;
 
 interface InferenceFieldIngest {
@@ -25,8 +27,9 @@ interface InferenceFieldIngest {
     AbstractInferenceField<?, ?> processInferenceResponses(
         ShardBulkInferenceActionFilter.AsyncBulkShardInferenceAction action,
         InferenceFieldMetadata inferenceFieldMetadata,
-        List<ShardBulkInferenceActionFilter.FieldInferenceResponse> responses
-    );
+        List<ShardBulkInferenceActionFilter.FieldInferenceResponse> responses,
+        XContentType contentType
+    ) throws IOException;
 
     static InferenceFieldIngest get(InferenceFieldType inferenceFieldType) {
         return switch (inferenceFieldType) {

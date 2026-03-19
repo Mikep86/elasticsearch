@@ -12,17 +12,26 @@ import org.elasticsearch.cluster.metadata.InferenceFieldMetadata;
 import org.elasticsearch.common.xcontent.support.XContentMapValues;
 import org.elasticsearch.index.mapper.InferenceMetadataFieldsMapper;
 import org.elasticsearch.inference.ChunkingSettings;
+import org.elasticsearch.inference.MinimalServiceSettings;
+import org.elasticsearch.inference.Model;
 import org.elasticsearch.rest.RestStatus;
+import org.elasticsearch.xcontent.XContentType;
 import org.elasticsearch.xpack.core.inference.chunking.ChunkingSettingsBuilder;
 import org.elasticsearch.xpack.inference.mapper.AbstractInferenceField;
+import org.elasticsearch.xpack.inference.mapper.SemanticTextField;
 import org.elasticsearch.xpack.inference.mapper.SemanticTextUtils;
 
+import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import static org.elasticsearch.xpack.inference.action.filter.ShardBulkInferenceActionFilter.EMPTY_CHUNKED_INFERENCE;
 import static org.elasticsearch.xpack.inference.action.filter.ShardBulkInferenceActionFilter.EXPLICIT_NULL;
+import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.toSemanticTextFieldChunks;
+import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.toSemanticTextFieldChunksLegacy;
 
 class SemanticTextFieldIngest implements InferenceFieldIngest {
     @Override
@@ -157,8 +166,45 @@ class SemanticTextFieldIngest implements InferenceFieldIngest {
     public AbstractInferenceField<?, ?> processInferenceResponses(
         ShardBulkInferenceActionFilter.AsyncBulkShardInferenceAction action,
         InferenceFieldMetadata inferenceFieldMetadata,
-        List<ShardBulkInferenceActionFilter.FieldInferenceResponse> responses
-    ) {
-        return null;
+        List<ShardBulkInferenceActionFilter.FieldInferenceResponse> responses,
+        XContentType contentType
+    ) throws IOException {
+        final String fieldName = inferenceFieldMetadata.getName();
+        final boolean useLegacyFormat = InferenceMetadataFieldsMapper.isEnabled(action.getIndexSettings()) == false;
+
+        Model model = null;
+        Map<String, List<SemanticTextField.Chunk>> chunkMap = new LinkedHashMap<>();
+        for (var resp : responses) {
+            // Get the first non-null model from the response list
+            if (model == null) {
+                model = resp.model();
+            }
+
+            var lst = chunkMap.computeIfAbsent(resp.sourceField(), k -> new ArrayList<>());
+            var chunks = useLegacyFormat
+                ? toSemanticTextFieldChunksLegacy(resp.input(), resp.chunkedResults(), contentType)
+                : toSemanticTextFieldChunks(resp.offsetAdjustment(), resp.chunkedResults(), contentType);
+            lst.addAll(chunks);
+        }
+
+        List<String> inputs = useLegacyFormat
+            ? responses.stream().filter(r -> r.sourceField().equals(fieldName)).map(r -> r.input()).collect(Collectors.toList())
+            : null;
+
+        // The model can be null if we are only processing update requests that clear inference results. This is ok because we will
+        // merge in the field's existing model settings on the data node.
+        return new SemanticTextField(
+            useLegacyFormat,
+            fieldName,
+            inputs,
+            new SemanticTextField.InferenceResult(
+                inferenceFieldMetadata.getInferenceId(),
+                model != null ? new MinimalServiceSettings(model) : null,
+                ChunkingSettingsBuilder.fromMap(inferenceFieldMetadata.getChunkingSettings(), false),
+                chunkMap,
+                useLegacyFormat
+            ),
+            contentType
+        );
     }
 }
