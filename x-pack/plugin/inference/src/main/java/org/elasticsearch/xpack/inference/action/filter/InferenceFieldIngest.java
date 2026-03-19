@@ -11,13 +11,13 @@ import org.elasticsearch.cluster.metadata.InferenceFieldMetadata;
 import org.elasticsearch.xpack.inference.mapper.AbstractInferenceField;
 
 import java.util.List;
-import java.util.Map;
 
 interface InferenceFieldIngest {
     List<ShardBulkInferenceActionFilter.FieldInferenceRequest> generateFieldInferenceRequests(
         ShardBulkInferenceActionFilter.AsyncBulkShardInferenceAction action,
         InferenceFieldMetadata inferenceFieldMetadata,
-        Map<String, Object> docMap,
+        ShardBulkInferenceActionFilter.AsyncBulkShardInferenceAction.IndexRequestWithIndexingPressure indexRequest,
+        int itemIndex,
         boolean isUpdateRequest
     );
 

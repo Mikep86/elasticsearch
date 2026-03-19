@@ -28,6 +28,7 @@ import org.elasticsearch.cluster.metadata.ProjectMetadata;
 import org.elasticsearch.cluster.service.ClusterService;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.settings.Setting;
+import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.concurrent.AtomicArray;
 import org.elasticsearch.common.util.concurrent.EsRejectedExecutionException;
@@ -114,8 +115,8 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
         Setting.Property.OperatorDynamic
     );
 
-    private static final Object EXPLICIT_NULL = new Object();
-    private static final ChunkedInference EMPTY_CHUNKED_INFERENCE = new EmptyChunkedInference();
+    static final Object EXPLICIT_NULL = new Object();
+    static final ChunkedInference EMPTY_CHUNKED_INFERENCE = new EmptyChunkedInference();
 
     private final ClusterService clusterService;
     private final InferenceServiceRegistry inferenceServiceRegistry;
@@ -188,8 +189,14 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
         final ProjectMetadata project = clusterService.state().getMetadata().getProject();
         var index = project.index(bulkShardRequest.index());
         boolean useLegacyFormat = InferenceMetadataFieldsMapper.isEnabled(index.getSettings()) == false;
-        new AsyncBulkShardInferenceAction(useLegacyFormat, fieldInferenceMap, bulkShardRequest, onCompletion, coordinatingIndexingPressure)
-            .run();
+        new AsyncBulkShardInferenceAction(
+            index.getSettings(),
+            useLegacyFormat,
+            fieldInferenceMap,
+            bulkShardRequest,
+            onCompletion,
+            coordinatingIndexingPressure
+        ).run();
     }
 
     private record InferenceProvider(InferenceService service, Model model) {}
@@ -234,7 +241,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
         ChunkedInference chunkedResults
     ) {}
 
-    private record FieldInferenceResponseAccumulator(
+    record FieldInferenceResponseAccumulator(
         int id,
         Map<String, List<FieldInferenceResponse>> responses,
         AtomicReference<Exception> failure
@@ -257,6 +264,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
     }
 
     class AsyncBulkShardInferenceAction implements Runnable {
+        private final Settings indexSettings;
         private final boolean useLegacyFormat;
         private final Map<String, InferenceFieldMetadata> fieldInferenceMap;
         private final BulkShardRequest bulkShardRequest;
@@ -265,18 +273,24 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
         private final IndexingPressure.Coordinating coordinatingIndexingPressure;
 
         private AsyncBulkShardInferenceAction(
+            Settings indexSettings,
             boolean useLegacyFormat,
             Map<String, InferenceFieldMetadata> fieldInferenceMap,
             BulkShardRequest bulkShardRequest,
             Runnable onCompletion,
             IndexingPressure.Coordinating coordinatingIndexingPressure
         ) {
+            this.indexSettings = indexSettings;
             this.useLegacyFormat = useLegacyFormat;
             this.fieldInferenceMap = fieldInferenceMap;
             this.bulkShardRequest = bulkShardRequest;
             this.inferenceResults = new AtomicArray<>(bulkShardRequest.items().length);
             this.onCompletion = onCompletion;
             this.coordinatingIndexingPressure = coordinatingIndexingPressure;
+        }
+
+        Settings getIndexSettings() {
+            return indexSettings;
         }
 
         @Override
@@ -623,29 +637,29 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
             return inputLength;
         }
 
-        private static class IndexRequestWithIndexingPressure {
+        static class IndexRequestWithIndexingPressure {
             private final IndexRequest indexRequest;
             private boolean indexingPressureIncremented;
 
-            private IndexRequestWithIndexingPressure(IndexRequest indexRequest) {
+            IndexRequestWithIndexingPressure(IndexRequest indexRequest) {
                 this.indexRequest = indexRequest;
                 this.indexingPressureIncremented = false;
             }
 
-            private IndexRequest getIndexRequest() {
+            IndexRequest getIndexRequest() {
                 return indexRequest;
             }
 
-            private boolean isIndexingPressureIncremented() {
+            boolean isIndexingPressureIncremented() {
                 return indexingPressureIncremented;
             }
 
-            private void setIndexingPressureIncremented() {
+            void setIndexingPressureIncremented() {
                 this.indexingPressureIncremented = true;
             }
         }
 
-        private boolean incrementIndexingPressurePreInference(IndexRequestWithIndexingPressure indexRequest, int itemIndex) {
+        boolean incrementIndexingPressurePreInference(IndexRequestWithIndexingPressure indexRequest, int itemIndex) {
             boolean success = true;
             if (indexRequest.isIndexingPressureIncremented() == false) {
                 try {
@@ -669,7 +683,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
             return success;
         }
 
-        private FieldInferenceResponseAccumulator ensureResponseAccumulatorSlot(int id) {
+        FieldInferenceResponseAccumulator ensureResponseAccumulatorSlot(int id) {
             FieldInferenceResponseAccumulator acc = inferenceResults.get(id);
             if (acc == null) {
                 acc = new FieldInferenceResponseAccumulator(id);
@@ -678,7 +692,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
             return acc;
         }
 
-        private void setInferenceResponseFailure(int id, Exception failure) {
+        void setInferenceResponseFailure(int id, Exception failure) {
             var acc = ensureResponseAccumulatorSlot(id);
             acc.setFailure(failure);
         }
