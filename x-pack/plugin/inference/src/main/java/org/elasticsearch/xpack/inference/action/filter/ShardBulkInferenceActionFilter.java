@@ -204,7 +204,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
      * @param offsetAdjustment The adjustment to apply to the chunk text offsets.
      * @param chunkingSettings Additional explicitly specified chunking settings, or null to use model defaults
      */
-    private record FieldInferenceRequest(
+    record FieldInferenceRequest(
         int bulkItemIndex,
         String field,
         String sourceField,
@@ -224,7 +224,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
      * @param model The model used to run inference.
      * @param chunkedResults The actual results.
      */
-    private record FieldInferenceResponse(
+    record FieldInferenceResponse(
         String field,
         String sourceField,
         String input,
@@ -256,7 +256,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
         }
     }
 
-    private class AsyncBulkShardInferenceAction implements Runnable {
+    class AsyncBulkShardInferenceAction implements Runnable {
         private final boolean useLegacyFormat;
         private final Map<String, InferenceFieldMetadata> fieldInferenceMap;
         private final BulkShardRequest bulkShardRequest;
