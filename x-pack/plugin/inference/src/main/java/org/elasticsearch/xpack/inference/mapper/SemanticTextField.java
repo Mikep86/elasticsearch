@@ -13,9 +13,13 @@ import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.common.xcontent.XContentParserUtils;
 import org.elasticsearch.common.xcontent.support.XContentMapValues;
 import org.elasticsearch.core.Nullable;
+import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import org.elasticsearch.inference.ChunkedInference;
 import org.elasticsearch.inference.ChunkingSettings;
 import org.elasticsearch.inference.MinimalServiceSettings;
+import org.elasticsearch.inference.TaskType;
+import org.elasticsearch.search.diversification.DenseVectorSupplier;
+import org.elasticsearch.search.vectors.VectorData;
 import org.elasticsearch.xcontent.ConstructingObjectParser;
 import org.elasticsearch.xcontent.DeprecationHandler;
 import org.elasticsearch.xcontent.NamedXContentRegistry;
@@ -40,13 +44,14 @@ import java.util.Objects;
 
 import static org.elasticsearch.xcontent.ConstructingObjectParser.constructorArg;
 import static org.elasticsearch.xcontent.ConstructingObjectParser.optionalConstructorArg;
+import static org.elasticsearch.xpack.inference.common.chunks.SemanticTextChunkUtils.getTextEmbeddingVectorFromChunk;
 
 /**
  * A {@link ToXContentObject} that is used to represent the transformation of the semantic text field's inputs.
  * The resulting object preserves the original input under the {@link SemanticTextField#TEXT_FIELD} and exposes
  * the inference results under the {@link SemanticTextField#INFERENCE_FIELD}.
  */
-public class SemanticTextField extends AbstractInferenceField<SemanticTextField.InferenceResult, SemanticTextField> {
+public class SemanticTextField extends AbstractInferenceField<SemanticTextField.InferenceResult, SemanticTextField> implements DenseVectorSupplier {
 
     static final String TEXT_FIELD = "text";
     static final String INFERENCE_FIELD = "inference";
@@ -440,5 +445,35 @@ public class SemanticTextField extends AbstractInferenceField<SemanticTextField.
     public static Chunk toSemanticTextFieldChunkLegacy(String input, ChunkedInference.Chunk chunk) {
         var text = input.substring(chunk.textOffset().start(), chunk.textOffset().end());
         return new Chunk(text, -1, -1, true, chunk.bytesReference(), chunk.contentType());
+    }
+
+    @Override
+    public String getSupplierContentType() {
+        return SemanticTextFieldMapper.CONTENT_TYPE;
+    }
+
+    @Override
+    public List<VectorData> getDenseVectorData() throws IOException {
+        if (this.inference == null || this.inference.chunks() == null) {
+            return null;
+        }
+
+        if (this.inference().modelSettings() == null || this.inference().modelSettings().taskType() != TaskType.TEXT_EMBEDDING) {
+            return null;
+        }
+
+        DenseVectorFieldMapper.ElementType elementType = this.inference().modelSettings().elementType();
+        if (elementType == null) {
+            return null;
+        }
+
+        List<VectorData> chunkVectors = new ArrayList<>();
+        for (List<Chunk> fieldChunks : this.inference.chunks.values()) {
+            for (Chunk chunk : fieldChunks) {
+                chunkVectors.add(getTextEmbeddingVectorFromChunk(chunk, contentType, elementType));
+            }
+        }
+
+        return chunkVectors;
     }
 }
