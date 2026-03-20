@@ -51,7 +51,9 @@ import static org.elasticsearch.xpack.inference.common.chunks.SemanticTextChunkU
  * The resulting object preserves the original input under the {@link SemanticTextField#TEXT_FIELD} and exposes
  * the inference results under the {@link SemanticTextField#INFERENCE_FIELD}.
  */
-public class SemanticTextField extends AbstractInferenceField<SemanticTextField.InferenceResult, SemanticTextField> implements DenseVectorSupplier {
+public class SemanticTextField extends AbstractInferenceField<SemanticTextField.InferenceResult, SemanticTextField>
+    implements
+        DenseVectorSupplier {
 
     static final String TEXT_FIELD = "text";
     static final String INFERENCE_FIELD = "inference";
