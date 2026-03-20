@@ -12,7 +12,6 @@ package org.elasticsearch.index.mapper;
 import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.join.BitSetProducer;
-import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.common.settings.Setting;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.features.NodeFeature;
@@ -20,8 +19,13 @@ import org.elasticsearch.index.IndexVersion;
 import org.elasticsearch.index.IndexVersions;
 import org.elasticsearch.index.query.SearchExecutionContext;
 
+import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.function.Function;
+
+import static org.elasticsearch.cluster.metadata.IndexMetadata.SETTING_INDEX_VERSION_CREATED;
+import static org.elasticsearch.index.IndexVersions.RESTRICT_SEMANTIC_TEXT_LEGACY_FORMAT;
 
 /**
  * An abstract {@link MetadataFieldMapper} used as a placeholder for implementation
@@ -38,6 +42,28 @@ public abstract class InferenceMetadataFieldsMapper extends MetadataFieldMapper 
     public static final Setting<Boolean> USE_LEGACY_SEMANTIC_TEXT_FORMAT = Setting.boolSetting(
         "index.mapping.semantic_text.use_legacy_format",
         false,
+        new Setting.Validator<>() {
+            @Override
+            public void validate(Boolean value) {}
+
+            @Override
+            public void validate(Boolean value, Map<Setting<?>, Object> settings) {
+                IndexVersion indexVersion = (IndexVersion) settings.get(SETTING_INDEX_VERSION_CREATED);
+                if (value && indexVersion.onOrAfter(RESTRICT_SEMANTIC_TEXT_LEGACY_FORMAT)) {
+                    throw new IllegalArgumentException(
+                        "Cannot set [index.mapping.semantic_text.use_legacy_format] to true when the index version is "
+                            + "greater than or equal to ["
+                            + RESTRICT_SEMANTIC_TEXT_LEGACY_FORMAT
+                            + "]"
+                    );
+                }
+            }
+
+            @Override
+            public Iterator<Setting<?>> settings() {
+                return List.<Setting<?>>of(SETTING_INDEX_VERSION_CREATED).iterator();
+            }
+        },
         Setting.Property.Final,
         Setting.Property.IndexScope,
         Setting.Property.InternalIndex
@@ -93,7 +119,7 @@ public abstract class InferenceMetadataFieldsMapper extends MetadataFieldMapper 
      * @return {@code true} if the new format is enabled; {@code false} otherwise
      */
     public static boolean isEnabled(Settings settings) {
-        var version = IndexMetadata.SETTING_INDEX_VERSION_CREATED.get(settings);
+        var version = SETTING_INDEX_VERSION_CREATED.get(settings);
         if ((version.before(IndexVersions.INFERENCE_METADATA_FIELDS)
             && version.between(IndexVersions.INFERENCE_METADATA_FIELDS_BACKPORT, IndexVersions.UPGRADE_TO_LUCENE_10_0_0) == false)
             || (version.onOrAfter(IndexVersions.UPGRADE_TO_LUCENE_10_0_0)
