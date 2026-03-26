@@ -345,20 +345,41 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
                 (n, c, o) -> parseIndexOptionsFromMap(n, o, c.indexVersionCreated(), experimentalFeaturesEnabled),
                 mapper -> ((SemanticTextFieldType) mapper.fieldType()).indexOptions,
                 (b, n, v) -> {
-                    if (v == null) {
-                        MinimalServiceSettings resolvedModelSettings = modelSettings.get() != null
-                            ? modelSettings.get()
-                            : modelRegistry.getMinimalServiceSettings(inferenceId.get());
-                        b.field(INDEX_OPTIONS_FIELD, defaultIndexOptions(indexVersionCreated, resolvedModelSettings));
-                    } else {
-                        // TODO: Any way to include element type when:
-                        // - include_defaults is set
-                        // - we defaulted to BFLOAT16
-                        b.field(INDEX_OPTIONS_FIELD, v);
-                    }
+                    throw new IllegalStateException("Serializer for [" + INDEX_OPTIONS_FIELD + "] should not be called");
                 },
                 Objects::toString
-            ).acceptsNull();
+            ) {
+                @Override
+                protected void toXContent(XContentBuilder builder, boolean includeDefaults) throws IOException {
+                    SemanticTextIndexOptions value = getValue();
+                    if (includeDefaults || isConfigured()) {
+                        if (value == null || value.indexOptions() == null) {
+                            // Default value, serialize resolved defaults
+                            MinimalServiceSettings resolvedModelSettings = getResolvedModelSettings();
+                            value = defaultIndexOptions(indexVersionCreated, resolvedModelSettings);
+                        } else if (value.type() == SemanticTextIndexOptions.SupportedIndexOptions.DENSE_VECTOR) {
+                            DenseVectorFieldMapper.ElementType elementTypeOverride = null;
+                            DenseVectorFieldMapper.DenseVectorIndexOptions dvio = null;
+                            if (value.indexOptions() instanceof ExtendedDenseVectorIndexOptions edvio) {
+                                elementTypeOverride = edvio.getElementType();
+                                dvio = edvio.getBaseIndexOptions();
+                            }
+
+                            MinimalServiceSettings resolvedModelSettings = getResolvedModelSettings();
+                            if (defaultElementTypeToBfloat16(indexVersionCreated, resolvedModelSettings.elementType())
+                                && includeDefaults
+                                && elementTypeOverride == null) {
+                                value = new SemanticTextIndexOptions(
+                                    SemanticTextIndexOptions.SupportedIndexOptions.DENSE_VECTOR,
+                                    new ExtendedDenseVectorIndexOptions(dvio, DenseVectorFieldMapper.ElementType.BFLOAT16)
+                                );
+                            }
+                        }
+
+                        builder.field(INDEX_OPTIONS_FIELD, value);
+                    }
+                }
+            }.acceptsNull();
 
             this.inferenceFieldBuilder = c -> {
                 // Resolve the model setting from the registry if it has not been set yet.
@@ -505,6 +526,10 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
                 }
                 return null;
             }
+        }
+
+        private MinimalServiceSettings getResolvedModelSettings() {
+            return modelSettings.get() != null ? modelSettings.get() : modelRegistry.getMinimalServiceSettings(inferenceId.get());
         }
 
         @Override
