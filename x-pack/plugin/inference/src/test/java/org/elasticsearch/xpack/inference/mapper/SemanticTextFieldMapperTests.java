@@ -64,12 +64,14 @@ import org.elasticsearch.index.mapper.vectors.TokenPruningConfig;
 import org.elasticsearch.index.query.SearchExecutionContext;
 import org.elasticsearch.index.search.ESToParentBlockJoinQuery;
 import org.elasticsearch.inference.ChunkingSettings;
+import org.elasticsearch.inference.EndpointMetadataTests;
 import org.elasticsearch.inference.InferenceService;
 import org.elasticsearch.inference.MinimalServiceSettings;
 import org.elasticsearch.inference.Model;
 import org.elasticsearch.inference.ServiceSettings;
 import org.elasticsearch.inference.SimilarityMeasure;
 import org.elasticsearch.inference.TaskType;
+import org.elasticsearch.inference.metadata.EndpointMetadata;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.search.LeafNestedDocuments;
 import org.elasticsearch.search.NestedDocuments;
@@ -1900,6 +1902,24 @@ public class SemanticTextFieldMapperTests extends MapperTestCase {
         SearchExecutionContext searchExecutionContext = createSearchExecutionContext(mapperService);
         Query existsQuery = ((SemanticTextFieldMapper) mapper).fieldType().existsQuery(searchExecutionContext);
         assertThat(existsQuery, instanceOf(ESToParentBlockJoinQuery.class));
+    }
+
+    public void testMappingUpdateDiscardsEndpointMetadata() throws IOException {
+        final String fieldName = "semantic";
+        final String inferenceId = "test_service";
+        final EndpointMetadata endpointMetadata = EndpointMetadataTests.randomNonEmptyInstance();
+        final MinimalServiceSettings modelSettings = new MinimalServiceSettings(
+            "test-service",
+            TaskType.SPARSE_EMBEDDING,
+            null,
+            null,
+            null,
+            endpointMetadata
+        );
+
+        MapperService mapperService = mapperServiceForFieldWithModelSettings(fieldName, inferenceId, modelSettings);
+        SemanticTextFieldMapper mapper = getSemanticFieldMapper(mapperService, fieldName);
+        assertThat(mapper.fieldType().getModelSettings().endpointMetadata(), equalTo(EndpointMetadata.EMPTY_INSTANCE));
     }
 
     private static DenseVectorFieldMapper.DenseVectorIndexOptions defaultDenseVectorIndexOptions() {
