@@ -18,7 +18,7 @@ import java.io.IOException;
  * Represents general index options that can be attached to a semantic or vector field.
  */
 public abstract class IndexOptions implements ToXContentObject {
-    abstract public void toXContentFragment(XContentBuilder builder, Params params) throws IOException;
+    public abstract void toXContentFragment(XContentBuilder builder, Params params) throws IOException;
 
     @Override
     public final XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
