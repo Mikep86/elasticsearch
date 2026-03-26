@@ -13,6 +13,7 @@ import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.XContentHelper;
+import org.elasticsearch.common.xcontent.support.XContentMapValues;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.mapper.MapperParsingException;
@@ -57,6 +58,8 @@ import java.util.function.Function;
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.CoreMatchers.equalTo;
+import static org.hamcrest.CoreMatchers.is;
+import static org.hamcrest.CoreMatchers.nullValue;
 
 @ESTestCase.WithoutEntitlements // due to dependency issue ES-12435
 public class SemanticTextIndexOptionsIT extends ESIntegTestCase {
@@ -156,6 +159,21 @@ public class SemanticTextIndexOptionsIT extends ESIntegTestCase {
         // Filter out null/empty values from params we didn't set to make comparison easier
         Map<String, Object> actualFieldMappings = filterNullOrEmptyValues(getFieldMappings(inferenceFieldName, true));
         assertThat(actualFieldMappings, equalTo(expectedFieldMapping));
+    }
+
+    public void testGetDefaultIndexOptionsBeforeInferenceServiceExists() throws Exception {
+        final String inferenceId = randomIdentifier();
+        final String inferenceFieldName = "inference_field";
+
+        assertAcked(safeGet(prepareCreate(INDEX_NAME).setMapping(generateMapping(inferenceFieldName, inferenceId, null)).execute()));
+        Map<String, Object> actualFieldMappings = getFieldMappings(inferenceFieldName, true);
+
+        Map<String, Object> inferenceFieldMappings = XContentMapValues.nodeMapValue(
+            actualFieldMappings.get(inferenceFieldName),
+            inferenceFieldName
+        );
+        assertThat(inferenceFieldMappings.containsKey("index_options"), is(true));
+        assertThat(inferenceFieldMappings.get("index_options"), nullValue());
     }
 
     public void testInvalidElementTypeOverride() throws Exception {

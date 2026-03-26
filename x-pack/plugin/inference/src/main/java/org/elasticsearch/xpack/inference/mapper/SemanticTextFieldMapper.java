@@ -355,7 +355,7 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
                     if (includeDefaults || isConfigured()) {
                         if (value == null || value.indexOptions() == null) {
                             // Default value, serialize resolved defaults
-                            MinimalServiceSettings resolvedModelSettings = getResolvedModelSettings();
+                            MinimalServiceSettings resolvedModelSettings = getResolvedModelSettings(null, false);
                             value = defaultIndexOptions(indexVersionCreated, resolvedModelSettings);
                         } else if (value.type() == SemanticTextIndexOptions.SupportedIndexOptions.DENSE_VECTOR) {
                             DenseVectorFieldMapper.ElementType elementTypeOverride = null;
@@ -365,7 +365,11 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
                                 dvio = edvio.getBaseIndexOptions();
                             }
 
-                            MinimalServiceSettings resolvedModelSettings = getResolvedModelSettings();
+                            MinimalServiceSettings resolvedModelSettings = getResolvedModelSettings(null, false);
+                            if (resolvedModelSettings == null) {
+                                throw new IllegalStateException("Model settings should be resolvable when explicit index options are set");
+                            }
+
                             if (defaultElementTypeToBfloat16(indexVersionCreated, resolvedModelSettings.elementType())
                                 && includeDefaults
                                 && elementTypeOverride == null) {
@@ -383,7 +387,7 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
 
             this.inferenceFieldBuilder = c -> {
                 // Resolve the model setting from the registry if it has not been set yet.
-                var resolvedModelSettings = modelSettings.get() != null ? modelSettings.get() : getResolvedModelSettings(c, false);
+                var resolvedModelSettings = getResolvedModelSettings(c, false);
                 return createInferenceFieldBuilder(
                     useLegacyFormat,
                     resolvedModelSettings,
@@ -496,11 +500,16 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
          * Returns the {@link MinimalServiceSettings} defined in this builder if set;
          * otherwise, resolves and returns the settings from the registry.
          */
-        private MinimalServiceSettings getResolvedModelSettings(MapperBuilderContext context, boolean logWarning) {
-            if (context.getMergeReason() == MapperService.MergeReason.MAPPING_RECOVERY) {
+        private MinimalServiceSettings getResolvedModelSettings(@Nullable MapperBuilderContext context, boolean logWarning) {
+            if (modelSettings.get() != null) {
+                return modelSettings.get();
+            }
+
+            if (context != null && context.getMergeReason() == MapperService.MergeReason.MAPPING_RECOVERY) {
                 // the model registry is not available yet
                 return null;
             }
+
             try {
                 /*
                  * If the model is not already set and we are not in a recovery scenario, resolve it using the registry.
@@ -528,10 +537,6 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
             }
         }
 
-        private MinimalServiceSettings getResolvedModelSettings() {
-            return modelSettings.get() != null ? modelSettings.get() : modelRegistry.getMinimalServiceSettings(inferenceId.get());
-        }
-
         @Override
         public String contentType() {
             return CONTENT_TYPE;
@@ -546,14 +551,7 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
                 throw new IllegalArgumentException(CONTENT_TYPE + " field [" + leafName() + "] does not support multi-fields");
             }
 
-            var resolvedModelSettings = modelSettings.get();
-            if (modelSettings.get() == null) {
-                resolvedModelSettings = getResolvedModelSettings(context, true);
-            }
-
-            if (modelSettings.get() != null) {
-                validateServiceSettings(modelSettings.get(), resolvedModelSettings);
-            }
+            var resolvedModelSettings = getResolvedModelSettings(context, true);
 
             // If index_options are specified by the user, we will validate them against the model settings to ensure compatibility.
             // We do not serialize or otherwise store model settings at this time, this happens when the underlying vector field is created.
@@ -587,33 +585,6 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
                 modelRegistry,
                 vectorsFormatProviders
             );
-        }
-
-        private void validateServiceSettings(MinimalServiceSettings settings, MinimalServiceSettings resolved) {
-            switch (settings.taskType()) {
-                case SPARSE_EMBEDDING, TEXT_EMBEDDING -> {
-                }
-                default -> throw new IllegalArgumentException(
-                    "Wrong ["
-                        + MinimalServiceSettings.TASK_TYPE_FIELD
-                        + "], expected "
-                        + TEXT_EMBEDDING
-                        + " or "
-                        + SPARSE_EMBEDDING
-                        + ", got "
-                        + settings.taskType().name()
-                );
-            }
-            if (resolved != null && settings.canMergeWith(resolved) == false) {
-                throw new IllegalArgumentException(
-                    "Mismatch between provided and registered inference model settings. "
-                        + "Provided: ["
-                        + settings
-                        + "], Expected: ["
-                        + resolved
-                        + "]."
-                );
-            }
         }
 
         private void validateIndexOptions(SemanticTextIndexOptions indexOptions, String inferenceId, MinimalServiceSettings modelSettings) {
