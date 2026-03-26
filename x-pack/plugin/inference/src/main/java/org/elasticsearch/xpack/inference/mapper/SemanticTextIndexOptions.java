@@ -129,12 +129,16 @@ public class SemanticTextIndexOptions implements ToXContent {
         return Strings.toString(this);
     }
 
-    private static IndexOptions parseDenseVectorIndexOptionsFromMap(
+    private static ExtendedDenseVectorIndexOptions parseDenseVectorIndexOptionsFromMap(
         String fieldName,
         Map<String, Object> map,
         IndexVersion indexVersion,
         boolean experimentalFeaturesEnabled
     ) {
+        if (map == null || map.isEmpty()) {
+            return null;
+        }
+
         DenseVectorFieldMapper.ElementType elementType = null;
         String elementTypeStr = XContentMapValues.nodeStringValue(
             map.remove(ExtendedDenseVectorIndexOptions.ELEMENT_TYPE_FIELD.getPreferredName())
@@ -149,7 +153,10 @@ public class SemanticTextIndexOptions implements ToXContent {
             indexVersion,
             experimentalFeaturesEnabled
         );
-        return elementType != null ? new ExtendedDenseVectorIndexOptions(denseVectorIndexOptions, elementType) : denseVectorIndexOptions;
+
+        // If the map isn't empty, either element_type or type must be specified, guaranteeing that elementType or denseVectorIndexOptions
+        // is non-null
+        return new ExtendedDenseVectorIndexOptions(denseVectorIndexOptions, elementType);
     }
 
     private static DenseVectorFieldMapper.DenseVectorIndexOptions parseBaseDenseVectorIndexOptionsFromMap(

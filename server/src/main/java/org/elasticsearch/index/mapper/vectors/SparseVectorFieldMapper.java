@@ -592,7 +592,7 @@ public class SparseVectorFieldMapper extends FieldMapper {
         }
 
         public static SparseVectorIndexOptions parseFromMap(Map<String, Object> map) {
-            if (map == null) {
+            if (map == null || map.isEmpty()) {
                 return null;
             }
 

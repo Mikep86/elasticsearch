@@ -625,13 +625,15 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
                 DenseVectorFieldMapper.ElementType elementType = modelSettings.elementType();
                 DenseVectorFieldMapper.DenseVectorIndexOptions denseVectorIndexOptions;
                 IndexOptions innerIndexOptions = indexOptions.indexOptions();
-                if (innerIndexOptions instanceof DenseVectorFieldMapper.DenseVectorIndexOptions dvio) {
-                    denseVectorIndexOptions = dvio;
-                } else if (innerIndexOptions instanceof ExtendedDenseVectorIndexOptions edvio) {
+                if (innerIndexOptions instanceof ExtendedDenseVectorIndexOptions edvio) {
                     denseVectorIndexOptions = edvio.getBaseIndexOptions();
 
-                    validateElementTypeOverride(elementType, edvio.getElementType());
-                    elementType = edvio.getElementType();
+                    if (edvio.getElementType() != null) {
+                        validateElementTypeOverride(elementType, edvio.getElementType());
+                        elementType = edvio.getElementType();
+                    }
+                } else if (innerIndexOptions == null) {
+                    denseVectorIndexOptions = null;
                 } else {
                     throw new IllegalStateException(
                         "Unexpected inner index options type [" + innerIndexOptions.getClass().getSimpleName() + "]"
@@ -1502,11 +1504,13 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
         if (indexOptions != null) {
             DenseVectorFieldMapper.DenseVectorIndexOptions denseVectorIndexOptions;
             IndexOptions innerIndexOptions = indexOptions.indexOptions();
-            if (innerIndexOptions instanceof DenseVectorFieldMapper.DenseVectorIndexOptions dvio) {
-                denseVectorIndexOptions = dvio;
-            } else if (innerIndexOptions instanceof ExtendedDenseVectorIndexOptions edvio) {
+            if (innerIndexOptions instanceof ExtendedDenseVectorIndexOptions edvio) {
                 denseVectorIndexOptions = edvio.getBaseIndexOptions();
-                resolvedElementType = edvio.getElementType();
+                if (edvio.getElementType() != null) {
+                    resolvedElementType = edvio.getElementType();
+                }
+            } else if (innerIndexOptions == null) {
+                denseVectorIndexOptions = null;
             } else {
                 throw new IllegalStateException(
                     "Unexpected inner index options type [" + innerIndexOptions.getClass().getSimpleName() + "]"
@@ -1580,17 +1584,20 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
         }
 
         if (modelSettings.taskType() == TaskType.TEXT_EMBEDDING) {
-            IndexOptions denseVectorIndexOptions = defaultDenseVectorIndexOptions(indexVersionCreated, modelSettings);
-            if (defaultElementTypeToBfloat16(indexVersionCreated, modelSettings.elementType())) {
-                denseVectorIndexOptions = new ExtendedDenseVectorIndexOptions(
-                    (DenseVectorFieldMapper.DenseVectorIndexOptions) denseVectorIndexOptions,
-                    DenseVectorFieldMapper.ElementType.BFLOAT16
-                );
-            }
+            DenseVectorFieldMapper.DenseVectorIndexOptions denseVectorIndexOptions = defaultDenseVectorIndexOptions(
+                indexVersionCreated,
+                modelSettings
+            );
+            DenseVectorFieldMapper.ElementType elementType = defaultElementTypeToBfloat16(indexVersionCreated, modelSettings.elementType())
+                ? DenseVectorFieldMapper.ElementType.BFLOAT16
+                : null;
 
-            return denseVectorIndexOptions == null
+            return denseVectorIndexOptions == null && elementType == null
                 ? null
-                : new SemanticTextIndexOptions(SemanticTextIndexOptions.SupportedIndexOptions.DENSE_VECTOR, denseVectorIndexOptions);
+                : new SemanticTextIndexOptions(
+                    SemanticTextIndexOptions.SupportedIndexOptions.DENSE_VECTOR,
+                    new ExtendedDenseVectorIndexOptions(denseVectorIndexOptions, elementType)
+                );
         }
 
         if (modelSettings.taskType() == SPARSE_EMBEDDING) {

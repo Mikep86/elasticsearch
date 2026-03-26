@@ -1329,7 +1329,9 @@ public class SemanticTextFieldMapperTests extends MapperTestCase {
                         IndexOptions expectedEmbeddingFieldIndexOptions = expectedIndexOptions.indexOptions();
                         if (expectedEmbeddingFieldIndexOptions instanceof ExtendedDenseVectorIndexOptions edvio) {
                             assertEquals(edvio.getBaseIndexOptions(), denseVectorFieldMapper.fieldType().getIndexOptions());
-                            expectedElementType = edvio.getElementType();
+                            if (edvio.getElementType() != null) {
+                                expectedElementType = edvio.getElementType();
+                            }
                         } else {
                             assertEquals(expectedEmbeddingFieldIndexOptions, denseVectorFieldMapper.fieldType().getIndexOptions());
                         }

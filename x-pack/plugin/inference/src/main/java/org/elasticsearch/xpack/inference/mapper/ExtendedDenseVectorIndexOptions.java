@@ -24,10 +24,10 @@ public class ExtendedDenseVectorIndexOptions extends IndexOptions {
 
     public ExtendedDenseVectorIndexOptions(
         @Nullable DenseVectorFieldMapper.DenseVectorIndexOptions baseIndexOptions,
-        DenseVectorFieldMapper.ElementType elementType
+        @Nullable DenseVectorFieldMapper.ElementType elementType
     ) {
         this.baseIndexOptions = baseIndexOptions;
-        this.elementType = Objects.requireNonNull(elementType);
+        this.elementType = elementType;
     }
 
     public DenseVectorFieldMapper.DenseVectorIndexOptions getBaseIndexOptions() {
@@ -43,7 +43,9 @@ public class ExtendedDenseVectorIndexOptions extends IndexOptions {
         if (baseIndexOptions != null) {
             baseIndexOptions.toXContentFragment(builder, params);
         }
-        builder.field(ELEMENT_TYPE_FIELD.getPreferredName(), elementType.toString());
+        if (elementType != null) {
+            builder.field(ELEMENT_TYPE_FIELD.getPreferredName(), elementType.toString());
+        }
     }
 
     @Override
@@ -51,7 +53,7 @@ public class ExtendedDenseVectorIndexOptions extends IndexOptions {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         ExtendedDenseVectorIndexOptions that = (ExtendedDenseVectorIndexOptions) o;
-        return Objects.equals(baseIndexOptions, that.baseIndexOptions) && elementType == that.elementType;
+        return Objects.equals(baseIndexOptions, that.baseIndexOptions) && Objects.equals(elementType, that.elementType);
     }
 
     @Override
