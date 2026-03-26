@@ -16,7 +16,7 @@ import org.elasticsearch.xcontent.XContentBuilder;
 import java.io.IOException;
 import java.util.Objects;
 
-public class ExtendedDenseVectorIndexOptions implements IndexOptions {
+public class ExtendedDenseVectorIndexOptions extends IndexOptions {
     public static final ParseField ELEMENT_TYPE_FIELD = new ParseField("element_type");
 
     private final DenseVectorFieldMapper.DenseVectorIndexOptions baseIndexOptions;

@@ -1407,7 +1407,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
         public abstract VectorSimilarityFunction vectorSimilarityFunction(IndexVersion indexVersion, ElementType elementType);
     }
 
-    public abstract static class DenseVectorIndexOptions implements IndexOptions {
+    public abstract static class DenseVectorIndexOptions extends IndexOptions {
         final VectorIndexType type;
 
         DenseVectorIndexOptions(VectorIndexType type) {
