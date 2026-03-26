@@ -1904,7 +1904,7 @@ public class SemanticTextFieldMapperTests extends MapperTestCase {
         assertThat(existsQuery, instanceOf(ESToParentBlockJoinQuery.class));
     }
 
-    public void testMappingUpdateDiscardsEndpointMetadata() throws IOException {
+    public void testDynamicUpdateDiscardsEndpointMetadata() throws IOException {
         final String fieldName = "semantic";
         final String inferenceId = "test_service";
         final EndpointMetadata endpointMetadata = EndpointMetadataTests.randomNonEmptyInstance();
@@ -1917,9 +1917,38 @@ public class SemanticTextFieldMapperTests extends MapperTestCase {
             endpointMetadata
         );
 
+        // mapperServiceForFieldWithModelSettings triggers a dynamic mapping update
         MapperService mapperService = mapperServiceForFieldWithModelSettings(fieldName, inferenceId, modelSettings);
         SemanticTextFieldMapper mapper = getSemanticFieldMapper(mapperService, fieldName);
         assertThat(mapper.fieldType().getModelSettings().endpointMetadata(), equalTo(EndpointMetadata.EMPTY_INSTANCE));
+    }
+
+    public void testMappingWithEndpointMetadata() throws IOException {
+        final EndpointMetadata endpointMetadata = EndpointMetadataTests.randomNonEmptyInstance();
+        final MinimalServiceSettings modelSettingsWithMetadata = new MinimalServiceSettings(
+            "test-service",
+            TaskType.SPARSE_EMBEDDING,
+            null,
+            null,
+            null,
+            endpointMetadata
+        );
+
+        MapperService originalMapperService = createMapperService(fieldMapping(b -> {
+            b.field("type", "semantic_text");
+            b.field("inference_id", "test_service");
+            b.field("model_settings", modelSettingsWithMetadata);
+        }), useLegacyFormat);
+        SemanticTextFieldMapper originalMapper = getSemanticFieldMapper(originalMapperService, "field");
+        assertThat(originalMapper.fieldType().getModelSettings().endpointMetadata(), equalTo(endpointMetadata));
+
+        // An XContent serialization cycle should remove the endpoint metadata
+        CompressedXContent mappingSource = originalMapperService.documentMapper().mappingSource();
+        MapperService parsedMapperService = createMapperService(mapping(b -> {}), useLegacyFormat);
+        parsedMapperService.merge("_doc", mappingSource, MapperService.MergeReason.MAPPING_UPDATE);
+
+        SemanticTextFieldMapper parsedMapper = getSemanticFieldMapper(parsedMapperService, "field");
+        assertThat(parsedMapper.fieldType().getModelSettings().endpointMetadata(), equalTo(EndpointMetadata.EMPTY_INSTANCE));
     }
 
     private static DenseVectorFieldMapper.DenseVectorIndexOptions defaultDenseVectorIndexOptions() {
