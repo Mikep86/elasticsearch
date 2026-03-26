@@ -196,7 +196,7 @@ public class SemanticTextFieldTests extends AbstractXContentTestCase<SemanticTex
         assertThat(ex.getMessage(), containsString("required [element_type] field is missing"));
     }
 
-    public void testModelSettingsXContentDoesNotSerializeEndpointMetadata() throws IOException {
+    public void testModelSettingsXContentExcludesEndpointMetadata() throws IOException {
         final EndpointMetadata endpointMetadata = EndpointMetadataTests.randomNonEmptyInstance();
         final MinimalServiceSettings modelSettings = new MinimalServiceSettings(
             "test-service",
