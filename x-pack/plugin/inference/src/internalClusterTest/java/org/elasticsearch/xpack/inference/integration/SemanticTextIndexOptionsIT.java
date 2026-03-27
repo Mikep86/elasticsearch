@@ -161,6 +161,7 @@ public class SemanticTextIndexOptionsIT extends ESIntegTestCase {
         final String inferenceId = randomIdentifier();
         final String inferenceFieldName = "inference_field";
 
+        // Create the index before the inference endpoint exists. Default index options cannot be determined yet.
         assertAcked(safeGet(prepareCreate(INDEX_NAME).setMapping(generateMapping(inferenceFieldName, inferenceId, null)).execute()));
         Map<String, Object> actualFieldMappings = getFieldMappings(inferenceFieldName, true);
 
@@ -170,6 +171,22 @@ public class SemanticTextIndexOptionsIT extends ESIntegTestCase {
         );
         assertThat(inferenceFieldMappings.containsKey("index_options"), is(true));
         assertThat(inferenceFieldMappings.get("index_options"), nullValue());
+
+        // Create the inference endpoint
+        createInferenceEndpoint(TaskType.TEXT_EMBEDDING, inferenceId, BBQ_COMPATIBLE_SERVICE_SETTINGS);
+
+        // We should now be able to get the default index options
+        final Map<String, Object> expectedFieldMapping = generateExpectedFieldMapping(
+            inferenceFieldName,
+            inferenceId,
+            new ExtendedDenseVectorIndexOptions(
+                SemanticTextFieldMapper.defaultBbqHnswDenseVectorIndexOptions(),
+                DenseVectorFieldMapper.ElementType.BFLOAT16
+            )
+        );
+
+        actualFieldMappings = filterNullOrEmptyValues(getFieldMappings(inferenceFieldName, true));
+        assertThat(actualFieldMappings, equalTo(expectedFieldMapping));
     }
 
     public void testSerializeDefaultToBfloat16WithExplicitType() throws Exception {
