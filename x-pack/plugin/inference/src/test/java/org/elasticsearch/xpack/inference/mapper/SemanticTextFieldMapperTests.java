@@ -2212,6 +2212,42 @@ public class SemanticTextFieldMapperTests extends MapperTestCase {
         );
     }
 
+    public void testInvalidElementTypeOverride() {
+        for (int i = 0; i < 10; i++) {
+            final Model model = TestModel.createRandomInstance(TaskType.TEXT_EMBEDDING);
+            final DenseVectorFieldMapper.ElementType modelElementType = model.getServiceSettings().elementType();
+
+            final DenseVectorFieldMapper.ElementType overrideElementType;
+            if (modelElementType == DenseVectorFieldMapper.ElementType.FLOAT) {
+                overrideElementType = randomFrom(DenseVectorFieldMapper.ElementType.BYTE, DenseVectorFieldMapper.ElementType.BIT);
+            } else {
+                overrideElementType = randomValueOtherThan(modelElementType, () -> randomFrom(DenseVectorFieldMapper.ElementType.values()));
+            }
+
+            MapperParsingException e = expectThrows(MapperParsingException.class, () -> createMapperService(fieldMapping(b -> {
+                b.field("type", "semantic_text");
+                b.field("inference_id", "test_inference_id");
+                b.startObject("model_settings");
+                b.field("task_type", model.getTaskType().toString());
+                b.field("dimensions", model.getServiceSettings().dimensions());
+                b.field("similarity", model.getServiceSettings().similarity().toString());
+                b.field("element_type", modelElementType.toString());
+                b.endObject();
+                b.startObject("index_options");
+                b.startObject("dense_vector");
+                b.field("element_type", overrideElementType.toString());
+                b.endObject();
+                b.endObject();
+            }), useLegacyFormat));
+            assertThat(
+                e.getMessage(),
+                containsString(
+                    "Model element type [" + modelElementType + "] is incompatible with element type override [" + overrideElementType + "]"
+                )
+            );
+        }
+    }
+
     public void testSpecificSparseVectorIndexOptions() throws IOException {
         for (int i = 0; i < 10; i++) {
             SparseVectorFieldMapper.SparseVectorIndexOptions testIndexOptions = randomSparseVectorIndexOptions(false);

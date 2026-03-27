@@ -16,7 +16,6 @@ import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.common.xcontent.support.XContentMapValues;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.TimeValue;
-import org.elasticsearch.index.mapper.MapperParsingException;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import org.elasticsearch.index.mapper.vectors.IndexOptions;
 import org.elasticsearch.inference.TaskType;
@@ -52,11 +51,8 @@ import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
-import java.util.function.Function;
 
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
-import static org.hamcrest.CoreMatchers.containsString;
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.is;
 import static org.hamcrest.CoreMatchers.nullValue;
@@ -174,40 +170,6 @@ public class SemanticTextIndexOptionsIT extends ESIntegTestCase {
         );
         assertThat(inferenceFieldMappings.containsKey("index_options"), is(true));
         assertThat(inferenceFieldMappings.get("index_options"), nullValue());
-    }
-
-    public void testInvalidElementTypeOverride() throws Exception {
-        final Function<DenseVectorFieldMapper.ElementType, DenseVectorFieldMapper.ElementType> getInvalidElementTypeOverride = i -> {
-            DenseVectorFieldMapper.ElementType o;
-            if (i == DenseVectorFieldMapper.ElementType.FLOAT) {
-                o = randomFrom(Set.of(DenseVectorFieldMapper.ElementType.BYTE, DenseVectorFieldMapper.ElementType.BIT));
-            } else {
-                o = randomValueOtherThan(i, () -> randomFrom(DenseVectorFieldMapper.ElementType.values()));
-            }
-
-            return o;
-        };
-
-        for (int i = 0; i < 10; i++) {
-            final String inferenceId = randomIdentifier();
-            final String inferenceFieldName = "inference_field";
-            final DenseVectorFieldMapper.ElementType modelElementType = randomFrom(DenseVectorFieldMapper.ElementType.values());
-            final DenseVectorFieldMapper.ElementType overrideElementType = getInvalidElementTypeOverride.apply(modelElementType);
-
-            createInferenceEndpoint(TaskType.TEXT_EMBEDDING, inferenceId, generateRandomTextEmbeddingServiceSettings(modelElementType));
-
-            IndexOptions indexOptions = new ExtendedDenseVectorIndexOptions(null, overrideElementType);
-            MapperParsingException e = expectThrows(
-                MapperParsingException.class,
-                prepareCreate(INDEX_NAME).setMapping(generateMapping(inferenceFieldName, inferenceId, indexOptions))
-            );
-            assertThat(
-                e.getMessage(),
-                containsString(
-                    "Model element type [" + modelElementType + "] is incompatible with element type override [" + overrideElementType + "]"
-                )
-            );
-        }
     }
 
     private void createInferenceEndpoint(TaskType taskType, String inferenceId, Map<String, Object> serviceSettings) throws IOException {
