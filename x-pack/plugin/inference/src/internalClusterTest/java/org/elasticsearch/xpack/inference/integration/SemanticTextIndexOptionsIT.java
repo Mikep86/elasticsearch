@@ -264,21 +264,6 @@ public class SemanticTextIndexOptionsIT extends ESIntegTestCase {
         builder.endObject();
     }
 
-    private static Map<String, Object> generateRandomTextEmbeddingServiceSettings(DenseVectorFieldMapper.ElementType elementType) {
-        return Map.of(
-            "model",
-            "my_model",
-            "dimensions",
-            randomIntBetween(4, 32) * 8, // Always generate a dimension count divisible by 8 so it is compatible with all element types
-            "similarity",
-            "cosine",
-            "api_key",
-            "my_api_key",
-            "element_type",
-            elementType.toString()
-        );
-    }
-
     private static Map<String, Object> generateExpectedFieldMapping(
         String inferenceFieldName,
         String inferenceId,
