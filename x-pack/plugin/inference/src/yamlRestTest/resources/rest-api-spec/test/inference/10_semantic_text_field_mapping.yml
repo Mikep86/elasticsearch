@@ -764,6 +764,34 @@ setup:
   - match: { error.caused_by.reason: "Must specify at least [element_type] or [type]" }
 
 ---
+"Invalid element type":
+  - requires:
+      cluster_features: [ "semantic_text.index_options", "semantic_text.element_type_in_index_options" ]
+      reason: Element type support in dense vector index options
+
+  - do:
+      catch: bad_request
+      indices.create:
+        index: test-invalid-element-type
+        body:
+          settings:
+            index:
+              mapping:
+                semantic_text:
+                  use_legacy_format: false
+          mappings:
+            properties:
+              semantic_field:
+                type: semantic_text
+                inference_id: dense-inference-id
+                index_options:
+                  dense_vector:
+                    element_type: foo
+
+  - match: { error.caused_by.type: illegal_argument_exception }
+  - match: { error.caused_by.reason: "/Invalid.element_type.\\[foo\\]/" }
+
+---
 "Specifying index options requires model information":
   - requires:
       cluster_features: "semantic_text.index_options"

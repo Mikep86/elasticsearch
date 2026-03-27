@@ -140,7 +140,17 @@ public class SemanticTextIndexOptions implements ToXContent {
             map.remove(ExtendedDenseVectorIndexOptions.ELEMENT_TYPE_FIELD.getPreferredName())
         );
         if (elementTypeStr != null) {
-            elementType = DenseVectorFieldMapper.ElementType.fromString(elementTypeStr);
+            elementType = DenseVectorFieldMapper.namesToElementType.get(elementTypeStr);
+            if (elementType == null) {
+                throw new IllegalArgumentException(
+                    "Invalid "
+                        + ExtendedDenseVectorIndexOptions.ELEMENT_TYPE_FIELD
+                        + " ["
+                        + elementTypeStr
+                        + "]; available types are "
+                        + DenseVectorFieldMapper.namesToElementType.keySet()
+                );
+            }
         }
 
         DenseVectorFieldMapper.DenseVectorIndexOptions denseVectorIndexOptions = parseBaseDenseVectorIndexOptionsFromMap(
