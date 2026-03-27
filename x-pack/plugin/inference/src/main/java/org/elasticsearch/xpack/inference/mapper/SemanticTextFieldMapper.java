@@ -552,6 +552,9 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
             }
 
             var resolvedModelSettings = getResolvedModelSettings(context, true);
+            if (resolvedModelSettings != null) {
+                validateTaskType(resolvedModelSettings);
+            }
 
             // If index_options are specified by the user, we will validate them against the model settings to ensure compatibility.
             // We do not serialize or otherwise store model settings at this time, this happens when the underlying vector field is created.
@@ -585,6 +588,23 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
                 modelRegistry,
                 vectorsFormatProviders
             );
+        }
+
+        private void validateTaskType(MinimalServiceSettings modelSettings) {
+            switch (modelSettings.taskType()) {
+                case SPARSE_EMBEDDING, TEXT_EMBEDDING -> {
+                }
+                default -> throw new IllegalArgumentException(
+                    "Wrong ["
+                        + MinimalServiceSettings.TASK_TYPE_FIELD
+                        + "], expected "
+                        + TEXT_EMBEDDING
+                        + " or "
+                        + SPARSE_EMBEDDING
+                        + ", got "
+                        + modelSettings.taskType().name()
+                );
+            }
         }
 
         private void validateIndexOptions(SemanticTextIndexOptions indexOptions, String inferenceId, MinimalServiceSettings modelSettings) {
