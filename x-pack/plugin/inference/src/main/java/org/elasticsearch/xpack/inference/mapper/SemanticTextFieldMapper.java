@@ -353,16 +353,20 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
                 protected void toXContent(XContentBuilder builder, boolean includeDefaults) throws IOException {
                     SemanticTextIndexOptions value = getValue();
                     if (includeDefaults || isConfigured()) {
-                        if (value == null || value.indexOptions() == null) {
+                        if (value == null) {
                             // Default value, serialize resolved defaults
                             MinimalServiceSettings resolvedModelSettings = getResolvedModelSettings(null, false);
                             value = defaultIndexOptions(indexVersionCreated, resolvedModelSettings);
                         } else if (value.type() == SemanticTextIndexOptions.SupportedIndexOptions.DENSE_VECTOR) {
-                            DenseVectorFieldMapper.ElementType elementTypeOverride = null;
-                            DenseVectorFieldMapper.DenseVectorIndexOptions dvio = null;
+                            DenseVectorFieldMapper.ElementType elementTypeOverride;
+                            DenseVectorFieldMapper.DenseVectorIndexOptions dvio;
                             if (value.indexOptions() instanceof ExtendedDenseVectorIndexOptions edvio) {
                                 elementTypeOverride = edvio.getElementType();
                                 dvio = edvio.getBaseIndexOptions();
+                            } else {
+                                throw new IllegalStateException(
+                                    "Unexpected inner index options type [" + value.indexOptions().getClass().getSimpleName() + "]"
+                                );
                             }
 
                             MinimalServiceSettings resolvedModelSettings = getResolvedModelSettings(null, false);
@@ -648,8 +652,6 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
                         validateElementTypeOverride(elementType, edvio.getElementType());
                         elementType = edvio.getElementType();
                     }
-                } else if (innerIndexOptions == null) {
-                    denseVectorIndexOptions = null;
                 } else {
                     throw new IllegalStateException(
                         "Unexpected inner index options type [" + innerIndexOptions.getClass().getSimpleName() + "]"
@@ -1525,8 +1527,6 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
                 if (edvio.getElementType() != null) {
                     resolvedElementType = edvio.getElementType();
                 }
-            } else if (innerIndexOptions == null) {
-                denseVectorIndexOptions = null;
             } else {
                 throw new IllegalStateException(
                     "Unexpected inner index options type [" + innerIndexOptions.getClass().getSimpleName() + "]"
