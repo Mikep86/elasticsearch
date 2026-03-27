@@ -172,6 +172,42 @@ public class SemanticTextIndexOptionsIT extends ESIntegTestCase {
         assertThat(inferenceFieldMappings.get("index_options"), nullValue());
     }
 
+    public void testSerializeDefaultToBfloat16WithExplicitType() throws Exception {
+        final String inferenceId = randomIdentifier();
+        final String inferenceFieldName = "inference_field";
+        createInferenceEndpoint(TaskType.TEXT_EMBEDDING, inferenceId, BBQ_COMPATIBLE_SERVICE_SETTINGS);
+
+        DenseVectorFieldMapper.DenseVectorIndexOptions baseIndexOptions = new DenseVectorFieldMapper.Int4HnswIndexOptions(
+            20,
+            90,
+            false,
+            null,
+            -1
+        );
+        assertAcked(
+            safeGet(prepareCreate(INDEX_NAME).setMapping(generateMapping(inferenceFieldName, inferenceId, baseIndexOptions)).execute())
+        );
+
+        final Map<String, Object> expectedFieldMappingWithoutDefaults = generateExpectedFieldMapping(
+            inferenceFieldName,
+            inferenceId,
+            baseIndexOptions
+        );
+        final Map<String, Object> expectedFieldMappingWithDefaults = generateExpectedFieldMapping(
+            inferenceFieldName,
+            inferenceId,
+            new ExtendedDenseVectorIndexOptions(baseIndexOptions, DenseVectorFieldMapper.ElementType.BFLOAT16)
+        );
+
+        // When include_defaults == false, the BFLOAT16 default should not be serialized
+        Map<String, Object> actualFieldMappings = filterNullOrEmptyValues(getFieldMappings(inferenceFieldName, false));
+        assertThat(actualFieldMappings, equalTo(expectedFieldMappingWithoutDefaults));
+
+        // When include_defaults == true, the BFLOAT16 default should be serialized
+        actualFieldMappings = filterNullOrEmptyValues(getFieldMappings(inferenceFieldName, true));
+        assertThat(actualFieldMappings, equalTo(expectedFieldMappingWithDefaults));
+    }
+
     private void createInferenceEndpoint(TaskType taskType, String inferenceId, Map<String, Object> serviceSettings) throws IOException {
         IntegrationTestUtils.createInferenceEndpoint(client(), taskType, inferenceId, serviceSettings);
         inferenceIds.put(inferenceId, taskType);
