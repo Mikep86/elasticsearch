@@ -2137,6 +2137,81 @@ public class SemanticTextFieldMapperTests extends MapperTestCase {
         assertThat(e.getMessage(), containsString("Unsupported index options type invalid"));
     }
 
+    public void testSetElementTypeInDenseVectorIndexOptions() throws IOException {
+        // Specifying the element type prevents defaulting to bfloat16
+        IndexVersion indexVersion = SemanticInferenceMetadataFieldsMapperTests.getRandomCompatibleIndexVersion(useLegacyFormat);
+        var mapperService = createMapperServiceWithIndexVersion(fieldMapping(b -> {
+            b.field("type", "semantic_text");
+            b.field("inference_id", "another_inference_id");
+            b.startObject("model_settings");
+            b.field("task_type", "text_embedding");
+            b.field("dimensions", 100);
+            b.field("similarity", "cosine");
+            b.field("element_type", "float");
+            b.endObject();
+            b.startObject("index_options");
+            b.startObject("dense_vector");
+            b.field("element_type", "float");
+            b.endObject();
+            b.endObject();
+        }), useLegacyFormat, indexVersion);
+
+        SemanticTextIndexOptions expectedDefaultIndexOptions = getExpectedDefaultIndexOptions(
+            TaskType.TEXT_EMBEDDING,
+            DenseVectorFieldMapper.ElementType.FLOAT,
+            100,
+            indexVersion
+        );
+        DenseVectorFieldMapper.DenseVectorIndexOptions expectedDenseVectorIndexOptions = expectedDefaultIndexOptions != null
+            ? (DenseVectorFieldMapper.DenseVectorIndexOptions) expectedDefaultIndexOptions.indexOptions()
+            : null;
+
+        assertSemanticTextField(
+            mapperService,
+            "field",
+            true,
+            null,
+            new SemanticTextIndexOptions(
+                SemanticTextIndexOptions.SupportedIndexOptions.DENSE_VECTOR,
+                new ExtendedDenseVectorIndexOptions(expectedDenseVectorIndexOptions, DenseVectorFieldMapper.ElementType.FLOAT)
+            )
+        );
+
+        // Can use element type in combination with type
+        mapperService = createMapperServiceWithIndexVersion(fieldMapping(b -> {
+            b.field("type", "semantic_text");
+            b.field("inference_id", "another_inference_id");
+            b.startObject("model_settings");
+            b.field("task_type", "text_embedding");
+            b.field("dimensions", 100);
+            b.field("similarity", "cosine");
+            b.field("element_type", "float");
+            b.endObject();
+            b.startObject("index_options");
+            b.startObject("dense_vector");
+            b.field("element_type", "float");
+            b.field("type", "int4_hnsw");
+            b.field("m", 20);
+            b.field("ef_construction", 90);
+            b.endObject();
+            b.endObject();
+        }), useLegacyFormat, indexVersion);
+
+        assertSemanticTextField(
+            mapperService,
+            "field",
+            true,
+            null,
+            new SemanticTextIndexOptions(
+                SemanticTextIndexOptions.SupportedIndexOptions.DENSE_VECTOR,
+                new ExtendedDenseVectorIndexOptions(
+                    new DenseVectorFieldMapper.Int4HnswIndexOptions(20, 90, false, null, -1),
+                    DenseVectorFieldMapper.ElementType.FLOAT
+                )
+            )
+        );
+    }
+
     public void testSpecificSparseVectorIndexOptions() throws IOException {
         for (int i = 0; i < 10; i++) {
             SparseVectorFieldMapper.SparseVectorIndexOptions testIndexOptions = randomSparseVectorIndexOptions(false);
