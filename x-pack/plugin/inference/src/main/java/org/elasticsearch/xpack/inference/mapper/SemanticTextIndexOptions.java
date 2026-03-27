@@ -135,10 +135,6 @@ public class SemanticTextIndexOptions implements ToXContent {
         IndexVersion indexVersion,
         boolean experimentalFeaturesEnabled
     ) {
-        if (map == null || map.isEmpty()) {
-            return null;
-        }
-
         DenseVectorFieldMapper.ElementType elementType = null;
         String elementTypeStr = XContentMapValues.nodeStringValue(
             map.remove(ExtendedDenseVectorIndexOptions.ELEMENT_TYPE_FIELD.getPreferredName())
@@ -154,8 +150,12 @@ public class SemanticTextIndexOptions implements ToXContent {
             experimentalFeaturesEnabled
         );
 
-        // If the map isn't empty, either element_type or type must be specified, guaranteeing that elementType or denseVectorIndexOptions
-        // is non-null
+        if (elementType == null && denseVectorIndexOptions == null) {
+            throw new IllegalArgumentException(
+                "Must specify either [" + ExtendedDenseVectorIndexOptions.ELEMENT_TYPE_FIELD + "] or [" + TYPE_FIELD + "]"
+            );
+        }
+
         return new ExtendedDenseVectorIndexOptions(denseVectorIndexOptions, elementType);
     }
 
