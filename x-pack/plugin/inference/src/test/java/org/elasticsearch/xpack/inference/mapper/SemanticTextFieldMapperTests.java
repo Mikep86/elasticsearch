@@ -1970,167 +1970,62 @@ public class SemanticTextFieldMapperTests extends MapperTestCase {
     }
 
     public void testDefaultIndexOptions() throws IOException {
+        for (int i = 0; i < 20; i++) {
+            final Model model = TestModel.createRandomInstance();
+            final IndexVersion indexVersion = SemanticInferenceMetadataFieldsMapperTests.getRandomCompatibleIndexVersion(useLegacyFormat);
 
-        // We default to BBQ for eligible dense vectors
-        var mapperService = createMapperService(fieldMapping(b -> {
-            b.field("type", "semantic_text");
-            b.field("inference_id", "another_inference_id");
-            b.startObject("model_settings");
-            b.field("task_type", "text_embedding");
-            b.field("dimensions", 100);
-            b.field("similarity", "cosine");
-            b.field("element_type", "float");
-            b.endObject();
-        }), useLegacyFormat, IndexVersions.SEMANTIC_TEXT_DEFAULTS_TO_BBQ);
-        assertSemanticTextField(mapperService, "field", true, null, defaultBbqHnswSemanticTextIndexOptions());
+            final TaskType taskType = model.getTaskType();
+            final DenseVectorFieldMapper.ElementType elementType = model.getServiceSettings().elementType();
+            final Integer dimensions = model.getServiceSettings().dimensions();
+            final SimilarityMeasure similarity = model.getServiceSettings().similarity();
 
-        // Element types that are incompatible with BBQ will continue to use dense_vector defaults
-        mapperService = createMapperService(fieldMapping(b -> {
-            b.field("type", "semantic_text");
-            b.field("inference_id", "another_inference_id");
-            b.startObject("model_settings");
-            b.field("task_type", "text_embedding");
-            b.field("dimensions", 100);
-            b.field("similarity", "cosine");
-            b.field("element_type", "byte");
-            b.endObject();
-        }), useLegacyFormat, IndexVersions.SEMANTIC_TEXT_DEFAULTS_TO_BBQ);
-        assertSemanticTextField(mapperService, "field", true, null, null);
+            MapperService mapperService = createMapperServiceWithIndexVersion(fieldMapping(b -> {
+                b.field("type", "semantic_text");
+                b.field("inference_id", "another_inference_id");
+                b.startObject("model_settings");
+                b.field("task_type", taskType.toString());
+                if (taskType == TaskType.TEXT_EMBEDDING) {
+                    b.field("dimensions", dimensions);
+                    b.field("similarity", similarity.toString());
+                    b.field("element_type", elementType.toString());
+                }
+                b.endObject();
+            }), useLegacyFormat, indexVersion);
 
-        // A dim count of 10 is too small to support BBQ, so we continue to use dense_vector defaults
-        mapperService = createMapperService(fieldMapping(b -> {
-            b.field("type", "semantic_text");
-            b.field("inference_id", "another_inference_id");
-            b.startObject("model_settings");
-            b.field("task_type", "text_embedding");
-            b.field("dimensions", 10);
-            b.field("similarity", "cosine");
-            b.field("element_type", "float");
-            b.endObject();
-        }), useLegacyFormat, IndexVersions.SEMANTIC_TEXT_DEFAULTS_TO_BBQ);
-        assertSemanticTextField(
-            mapperService,
-            "field",
-            true,
-            null,
-            new SemanticTextIndexOptions(SemanticTextIndexOptions.SupportedIndexOptions.DENSE_VECTOR, defaultDenseVectorIndexOptions())
-        );
-
-        // If we explicitly set index options, we respect those over the defaults
-        mapperService = createMapperService(fieldMapping(b -> {
-            b.field("type", "semantic_text");
-            b.field("inference_id", "another_inference_id");
-            b.startObject("model_settings");
-            b.field("task_type", "text_embedding");
-            b.field("dimensions", 100);
-            b.field("similarity", "cosine");
-            b.field("element_type", "float");
-            b.endObject();
-            b.startObject("index_options");
-            b.startObject("dense_vector");
-            b.field("type", "int4_hnsw");
-            b.field("m", 25);
-            b.field("ef_construction", 100);
-            b.endObject();
-            b.endObject();
-        }), useLegacyFormat, IndexVersions.SEMANTIC_TEXT_DEFAULTS_TO_BBQ);
-        assertSemanticTextField(
-            mapperService,
-            "field",
-            true,
-            null,
-            new SemanticTextIndexOptions(
-                SemanticTextIndexOptions.SupportedIndexOptions.DENSE_VECTOR,
-                new DenseVectorFieldMapper.Int4HnswIndexOptions(25, 100, false, null, -1)
-            )
-        );
-
-        // Previous index versions do not set BBQ index options
-        mapperService = createMapperService(fieldMapping(b -> {
-            b.field("type", "semantic_text");
-            b.field("inference_id", "another_inference_id");
-            b.startObject("model_settings");
-            b.field("task_type", "text_embedding");
-            b.field("dimensions", 100);
-            b.field("similarity", "cosine");
-            b.field("element_type", "float");
-            b.endObject();
-        }),
-            useLegacyFormat,
-            IndexVersions.INFERENCE_METADATA_FIELDS,
-            IndexVersionUtils.getPreviousVersion(IndexVersions.SEMANTIC_TEXT_DEFAULTS_TO_BBQ)
-        );
-        assertSemanticTextField(mapperService, "field", true, null, defaultDenseVectorSemanticIndexOptions());
-
-        // 8.x index versions that use backported default BBQ set default BBQ index options as expected
-        mapperService = createMapperService(fieldMapping(b -> {
-            b.field("type", "semantic_text");
-            b.field("inference_id", "another_inference_id");
-            b.startObject("model_settings");
-            b.field("task_type", "text_embedding");
-            b.field("dimensions", 100);
-            b.field("similarity", "cosine");
-            b.field("element_type", "float");
-            b.endObject();
-        }),
-            useLegacyFormat,
-            IndexVersions.SEMANTIC_TEXT_DEFAULTS_TO_BBQ_BACKPORT_8_X,
-            IndexVersionUtils.getPreviousVersion(IndexVersions.UPGRADE_TO_LUCENE_10_0_0)
-        );
-        assertSemanticTextField(mapperService, "field", true, null, defaultBbqHnswSemanticTextIndexOptions());
-
-        // Previous 8.x index versions do not set BBQ index options
-        mapperService = createMapperService(fieldMapping(b -> {
-            b.field("type", "semantic_text");
-            b.field("inference_id", "another_inference_id");
-            b.startObject("model_settings");
-            b.field("task_type", "text_embedding");
-            b.field("dimensions", 100);
-            b.field("similarity", "cosine");
-            b.field("element_type", "float");
-            b.endObject();
-        }),
-            useLegacyFormat,
-            IndexVersions.INFERENCE_METADATA_FIELDS_BACKPORT,
-            IndexVersionUtils.getPreviousVersion(IndexVersions.SEMANTIC_TEXT_DEFAULTS_TO_BBQ_BACKPORT_8_X)
-        );
-        assertSemanticTextField(mapperService, "field", true, null, defaultDenseVectorSemanticIndexOptions());
-
-        mapperService = createMapperService(fieldMapping(b -> {
-            b.field("type", "semantic_text");
-            b.field("inference_id", "another_inference_id");
-            b.startObject("model_settings");
-            b.field("task_type", "sparse_embedding");
-            b.endObject();
-        }),
-            useLegacyFormat,
-            IndexVersionUtils.getPreviousVersion(IndexVersions.SPARSE_VECTOR_PRUNING_INDEX_OPTIONS_SUPPORT),
-            IndexVersions.SPARSE_VECTOR_PRUNING_INDEX_OPTIONS_SUPPORT
-        );
-
-        assertSemanticTextField(
-            mapperService,
-            "field",
-            true,
-            null,
-            defaultSparseVectorIndexOptions(mapperService.getIndexSettings().getIndexVersionCreated())
-        );
+            assertSemanticTextField(
+                mapperService,
+                "field",
+                true,
+                null,
+                getExpectedDefaultIndexOptions(taskType, elementType, dimensions, indexVersion)
+            );
+        }
     }
 
-    public void testSparseVectorIndexOptionsDefaultsBeforeSupport() throws IOException {
-        var mapperService = createMapperService(fieldMapping(b -> {
-            b.field("type", "semantic_text");
-            b.field("inference_id", "another_inference_id");
-            b.startObject("model_settings");
-            b.field("task_type", "sparse_embedding");
-            b.endObject();
-        }),
-            useLegacyFormat,
-            IndexVersions.INFERENCE_METADATA_FIELDS,
-            IndexVersionUtils.getPreviousVersion(IndexVersions.SPARSE_VECTOR_PRUNING_INDEX_OPTIONS_SUPPORT)
-        );
-
-        assertSemanticTextField(mapperService, "field", true, null, null);
+    private SemanticTextIndexOptions getExpectedDefaultIndexOptions(
+        TaskType taskType,
+        DenseVectorFieldMapper.ElementType elementType,
+        Integer dimensions,
+        IndexVersion indexVersion
+    ) {
+        return switch (taskType) {
+            case TEXT_EMBEDDING -> {
+                boolean floatFamilyElementType = elementType == DenseVectorFieldMapper.ElementType.FLOAT
+                    || elementType == DenseVectorFieldMapper.ElementType.BFLOAT16;
+                if (floatFamilyElementType
+                    && SemanticTextFieldMapper.indexVersionDefaultsToBbqHnsw(indexVersion)
+                    && dimensions >= DenseVectorFieldMapper.BBQ_MIN_DIMS) {
+                    yield defaultBbqHnswSemanticTextIndexOptions();
+                } else if (elementType == DenseVectorFieldMapper.ElementType.FLOAT) {
+                    // Dense vector field has a bug where it won't default to INT8_HNSW with BFLOAT16 element type
+                    yield defaultDenseVectorSemanticIndexOptions();
+                } else {
+                    yield null;
+                }
+            }
+            case SPARSE_EMBEDDING -> defaultSparseVectorIndexOptions(indexVersion);
+            default -> throw new AssertionError("Unexpected task type [" + taskType + "]");
+        };
     }
 
     public void testSpecifiedDenseVectorIndexOptions() throws IOException {
