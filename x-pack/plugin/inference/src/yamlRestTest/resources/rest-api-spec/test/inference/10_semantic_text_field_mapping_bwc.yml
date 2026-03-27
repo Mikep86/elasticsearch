@@ -640,6 +640,33 @@ setup:
   - match: { error.caused_by.reason: "[type] is required when specifying more params than [element_type]" }
 
 ---
+"Index option element_type or type is required":
+  - requires:
+      cluster_features: [ "semantic_text.index_options", "semantic_text.element_type_in_index_options" ]
+      reason: Element type support in dense vector index options
+
+  - do:
+      catch: bad_request
+      indices.create:
+        index: test-invalid-index-options-dense
+        body:
+          settings:
+            index:
+              mapping:
+                semantic_text:
+                  use_legacy_format: true
+          mappings:
+            properties:
+              semantic_field:
+                type: semantic_text
+                inference_id: dense-inference-id
+                index_options:
+                  dense_vector: {}
+
+  - match: { error.caused_by.type: illegal_argument_exception }
+  - match: { error.caused_by.reason: "Must specify at least [element_type] or [type]" }
+
+---
 "Specifying index options requires model information":
   - requires:
       cluster_features: "semantic_text.index_options"

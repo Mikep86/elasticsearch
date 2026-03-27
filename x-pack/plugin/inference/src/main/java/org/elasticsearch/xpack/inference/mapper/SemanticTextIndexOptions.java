@@ -152,7 +152,7 @@ public class SemanticTextIndexOptions implements ToXContent {
 
         if (elementType == null && denseVectorIndexOptions == null) {
             throw new IllegalArgumentException(
-                "Must specify either [" + ExtendedDenseVectorIndexOptions.ELEMENT_TYPE_FIELD + "] or [" + TYPE_FIELD + "]"
+                "Must specify at least [" + ExtendedDenseVectorIndexOptions.ELEMENT_TYPE_FIELD + "] or [" + TYPE_FIELD + "]"
             );
         }
 
