@@ -80,8 +80,8 @@ public record SemanticTextField(
 
     public record InferenceResult(
         String inferenceId,
-        MinimalServiceSettings modelSettings,
-        ChunkingSettings chunkingSettings,
+        @Nullable MinimalServiceSettings modelSettings,
+        @Nullable ChunkingSettings chunkingSettings,
         Map<String, List<Chunk>> chunks
     ) {}
 
