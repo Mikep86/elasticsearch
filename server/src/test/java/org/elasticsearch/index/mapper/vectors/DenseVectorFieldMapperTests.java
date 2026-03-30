@@ -1397,7 +1397,7 @@ public class DenseVectorFieldMapperTests extends SyntheticVectorsMapperTestCase 
     public void testDefaultIndexOptions() throws IOException {
         for (int i = 0; i < 100; i++) {
             // Pick a random index version from one of three eras that each produce different default index options
-            int era = randomIntBetween(0, 2);
+            int era = randomIntBetween(0, 3);
             IndexVersion indexVersion = switch (era) {
                 case 0 -> IndexVersionUtils.randomVersionBetween(
                     IndexVersionUtils.getLowestReadCompatibleVersion(),
@@ -1407,7 +1407,15 @@ public class DenseVectorFieldMapperTests extends SyntheticVectorsMapperTestCase 
                     DenseVectorFieldMapper.DEFAULT_TO_INT8,
                     IndexVersionUtils.getPreviousVersion(DenseVectorFieldMapper.DEFAULT_TO_BBQ)
                 );
-                default -> IndexVersionUtils.randomVersionBetween(DenseVectorFieldMapper.DEFAULT_TO_BBQ, IndexVersion.current());
+                case 2 -> IndexVersionUtils.randomVersionBetween(
+                    DenseVectorFieldMapper.DEFAULT_TO_BBQ,
+                    IndexVersionUtils.getPreviousVersion(IndexVersions.DENSE_VECTOR_BFLOAT16_DEFAULT_INDEX_OPTIONS)
+                );
+                case 3 -> IndexVersionUtils.randomVersionBetween(
+                    IndexVersions.DENSE_VECTOR_BFLOAT16_DEFAULT_INDEX_OPTIONS,
+                    IndexVersion.current()
+                );
+                default -> throw new AssertionError("Unexpected value: " + era);
             };
 
             boolean defaultInt8Hnsw = indexVersion.onOrAfter(DenseVectorFieldMapper.DEFAULT_TO_INT8);
@@ -1433,8 +1441,7 @@ public class DenseVectorFieldMapperTests extends SyntheticVectorsMapperTestCase 
             DenseVectorFieldMapper mapper = (DenseVectorFieldMapper) mapperService.mappingLookup().getMapper("field");
             DenseVectorFieldMapper.DenseVectorIndexOptions indexOptions = mapper.fieldType().getIndexOptions();
 
-            if (elementType != ElementType.FLOAT && elementType != ElementType.BFLOAT16) {
-                // Default quantized index options only apply to float/bfloat16 vectors
+            if (DenseVectorFieldMapperTestUtils.elementTypesWithDefaultIndexOptions(indexVersion).contains(elementType) == false) {
                 assertNull(indexOptions);
             } else if (defaultBBQHnsw && dims >= DenseVectorFieldMapper.BBQ_DIMS_DEFAULT_THRESHOLD) {
                 assertThat(indexOptions, instanceOf(DenseVectorFieldMapper.BBQHnswIndexOptions.class));
