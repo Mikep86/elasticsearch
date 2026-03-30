@@ -394,8 +394,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
         }
 
         private DenseVectorIndexOptions defaultIndexOptions(boolean defaultInt8Hnsw, boolean defaultBBQHnsw) {
-            if ((elementType.getValue() != ElementType.FLOAT && elementType.getValue() != ElementType.BFLOAT16)
-                || indexed.getValue() == false) {
+            if (elementTypesWithDefaultIndexOptions().contains(elementType.getValue()) == false || indexed.getValue() == false) {
                 return null;
             }
 
@@ -425,6 +424,14 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 );
             }
             return null;
+        }
+
+        private Set<ElementType> elementTypesWithDefaultIndexOptions() {
+            if (indexVersionCreated.onOrAfter(IndexVersions.DENSE_VECTOR_BFLOAT16_DEFAULT_INDEX_OPTIONS)) {
+                return Set.of(ElementType.FLOAT, ElementType.BFLOAT16);
+            } else {
+                return Set.of(ElementType.FLOAT);
+            }
         }
 
         @Override
