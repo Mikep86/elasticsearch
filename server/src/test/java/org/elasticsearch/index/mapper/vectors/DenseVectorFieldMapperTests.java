@@ -1422,7 +1422,7 @@ public class DenseVectorFieldMapperTests extends SyntheticVectorsMapperTestCase 
                     .toList()
             );
 
-            DocumentMapper documentMapper = createDocumentMapper(indexVersion, fieldMapping(b -> {
+            MapperService mapperService = createMapperService(indexVersion, fieldMapping(b -> {
                 b.field("type", "dense_vector");
                 b.field("index", true);
                 b.field("element_type", elementType.toString());
@@ -1430,7 +1430,7 @@ public class DenseVectorFieldMapperTests extends SyntheticVectorsMapperTestCase 
                 b.field("similarity", similarity.toString());
             }));
 
-            DenseVectorFieldMapper mapper = (DenseVectorFieldMapper) documentMapper.mappers().getMapper("field");
+            DenseVectorFieldMapper mapper = (DenseVectorFieldMapper) mapperService.mappingLookup().getMapper("field");
             DenseVectorFieldMapper.DenseVectorIndexOptions indexOptions = mapper.fieldType().getIndexOptions();
 
             if (elementType != ElementType.FLOAT && elementType != ElementType.BFLOAT16) {
