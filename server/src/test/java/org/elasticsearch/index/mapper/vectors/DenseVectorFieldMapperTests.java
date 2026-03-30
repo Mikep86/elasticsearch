@@ -52,6 +52,7 @@ import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.DenseVector
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.ElementType;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.VectorSimilarity;
 import org.elasticsearch.index.query.SearchExecutionContext;
+import org.elasticsearch.inference.SimilarityMeasure;
 import org.elasticsearch.search.lookup.Source;
 import org.elasticsearch.search.lookup.SourceProvider;
 import org.elasticsearch.search.vectors.VectorData;
@@ -1391,6 +1392,59 @@ public class DenseVectorFieldMapperTests extends SyntheticVectorsMapperTestCase 
 
         assertTrue(denseVectorFieldType.indexType().hasVectors());
         assertEquals(VectorSimilarity.COSINE, denseVectorFieldType.getSimilarity());
+    }
+
+    public void testDefaultIndexOptions() throws IOException {
+        for (int i = 0; i < 100; i++) {
+            // Pick a random index version from one of three eras that each produce different default index options
+            int era = randomIntBetween(0, 2);
+            IndexVersion indexVersion = switch (era) {
+                case 0 -> IndexVersionUtils.randomVersionBetween(
+                    IndexVersionUtils.getLowestReadCompatibleVersion(),
+                    IndexVersionUtils.getPreviousVersion(DenseVectorFieldMapper.DEFAULT_TO_INT8)
+                );
+                case 1 -> IndexVersionUtils.randomVersionBetween(
+                    DenseVectorFieldMapper.DEFAULT_TO_INT8,
+                    IndexVersionUtils.getPreviousVersion(DenseVectorFieldMapper.DEFAULT_TO_BBQ)
+                );
+                default -> IndexVersionUtils.randomVersionBetween(DenseVectorFieldMapper.DEFAULT_TO_BBQ, IndexVersion.current());
+            };
+
+            boolean defaultInt8Hnsw = indexVersion.onOrAfter(DenseVectorFieldMapper.DEFAULT_TO_INT8);
+            boolean defaultBBQHnsw = indexVersion.onOrAfter(DenseVectorFieldMapper.DEFAULT_TO_BBQ);
+
+            final ElementType elementType = randomFrom(ElementType.values());
+            final int dims = DenseVectorFieldMapperTestUtils.randomCompatibleDimensions(elementType, 512);
+            final VectorSimilarity similarity = randomFrom(
+                DenseVectorFieldMapperTestUtils.getSupportedSimilarities(elementType)
+                    .stream()
+                    .map(SimilarityMeasure::vectorSimilarity)
+                    .toList()
+            );
+
+            DocumentMapper documentMapper = createDocumentMapper(indexVersion, fieldMapping(b -> {
+                b.field("type", "dense_vector");
+                b.field("index", true);
+                b.field("element_type", elementType.toString());
+                b.field("dims", dims);
+                b.field("similarity", similarity.toString());
+            }));
+
+            DenseVectorFieldMapper mapper = (DenseVectorFieldMapper) documentMapper.mappers().getMapper("field");
+            DenseVectorFieldMapper.DenseVectorIndexOptions indexOptions = mapper.fieldType().getIndexOptions();
+
+            if (elementType != ElementType.FLOAT && elementType != ElementType.BFLOAT16) {
+                // Default quantized index options only apply to float/bfloat16 vectors
+                assertNull(indexOptions);
+            } else if (defaultBBQHnsw && dims >= DenseVectorFieldMapper.BBQ_DIMS_DEFAULT_THRESHOLD) {
+                assertThat(indexOptions, instanceOf(DenseVectorFieldMapper.BBQHnswIndexOptions.class));
+            } else if (defaultInt8Hnsw) {
+                // INT8 era, or BBQ era with dims below the BBQ threshold
+                assertThat(indexOptions, instanceOf(DenseVectorFieldMapper.Int8HnswIndexOptions.class));
+            } else {
+                assertNull(indexOptions);
+            }
+        }
     }
 
     public void testValidateOnBuild() {
