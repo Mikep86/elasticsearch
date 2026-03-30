@@ -394,7 +394,8 @@ public class DenseVectorFieldMapper extends FieldMapper {
         }
 
         private DenseVectorIndexOptions defaultIndexOptions(boolean defaultInt8Hnsw, boolean defaultBBQHnsw) {
-            if (elementType.getValue() != ElementType.FLOAT || indexed.getValue() == false) {
+            if ((elementType.getValue() != ElementType.FLOAT && elementType.getValue() != ElementType.BFLOAT16)
+                || indexed.getValue() == false) {
                 return null;
             }
 
