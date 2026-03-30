@@ -1970,9 +1970,11 @@ public class SemanticTextFieldMapperTests extends MapperTestCase {
     }
 
     public void testDefaultIndexOptions() throws IOException {
-        for (int i = 0; i < 20; i++) {
+        for (int i = 0; i < 100; i++) {
             final Model model = TestModel.createRandomInstance();
-            final IndexVersion indexVersion = SemanticInferenceMetadataFieldsMapperTests.getRandomCompatibleIndexVersion(useLegacyFormat);
+            final IndexVersion indexVersion = randomBoolean()
+                ? SemanticInferenceMetadataFieldsMapperTests.getRandomCompatibleIndexVersion(useLegacyFormat)
+                : IndexVersion.current();
 
             final TaskType taskType = model.getTaskType();
             final DenseVectorFieldMapper.ElementType elementType = model.getServiceSettings().elementType();
