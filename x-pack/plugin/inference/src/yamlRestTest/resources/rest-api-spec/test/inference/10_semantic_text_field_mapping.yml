@@ -912,6 +912,66 @@ setup:
 
   - match: { status: 400 }
 
+---
+"Cannot update element type in index options":
+  - requires:
+      cluster_features: [ "semantic_text.index_options", "semantic_text.element_type_in_index_options" ]
+      reason: Element type support in dense vector index options
+
+  - do:
+      indices.create:
+        index: test-index-options
+        body:
+          settings:
+            index:
+              mapping:
+                semantic_text:
+                  use_legacy_format: false
+          mappings:
+            properties:
+              semantic_field:
+                type: semantic_text
+                inference_id: dense-inference-id
+                index_options:
+                  dense_vector:
+                    element_type: float
+
+  - do:
+      indices.get_mapping:
+        index: test-index-options
+
+  - match: { "test-index-options.mappings.properties.semantic_field.index_options.dense_vector.element_type": float }
+
+  # Explicitly update element type to bfloat16
+  - do:
+      catch: bad_request
+      indices.put_mapping:
+        index: test-index-options
+        body:
+          properties:
+            semantic_field:
+              type: semantic_text
+              inference_id: dense-inference-id
+              index_options:
+                dense_vector:
+                  element_type: bfloat16
+
+  - match: { error.type: "illegal_argument_exception" }
+  - match: { error.reason: "/Cannot.update.parameter.\\[element_type\\].from.\\[float\\].to.\\[bfloat16\\]/" }
+
+  # Implicitly update element type to by excluding it and relying on default behavior
+  - do:
+      catch: bad_request
+      indices.put_mapping:
+        index: test-index-options
+        body:
+          properties:
+            semantic_field:
+              type: semantic_text
+              inference_id: dense-inference-id
+
+  - match: { error.type: "illegal_argument_exception" }
+  - match: { error.reason: "/Cannot.update.parameter.\\[element_type\\].from.\\[float\\].to.\\[bfloat16\\]/" }
 
 ---
 "Displaying default index_options with and without include_defaults":
