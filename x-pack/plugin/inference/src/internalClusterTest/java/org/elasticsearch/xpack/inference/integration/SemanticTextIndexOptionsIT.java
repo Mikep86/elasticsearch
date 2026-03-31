@@ -60,6 +60,7 @@ import static org.hamcrest.CoreMatchers.nullValue;
 @ESTestCase.WithoutEntitlements // due to dependency issue ES-12435
 public class SemanticTextIndexOptionsIT extends ESIntegTestCase {
     private static final String INDEX_NAME = "test-index";
+
     private static final Map<String, Object> BBQ_COMPATIBLE_SERVICE_SETTINGS = Map.of(
         "model",
         "my_model",
@@ -69,6 +70,19 @@ public class SemanticTextIndexOptionsIT extends ESIntegTestCase {
         "cosine",
         "api_key",
         "my_api_key"
+    );
+
+    private static final Map<String, Object> BFLOAT16_SERVICE_SETTINGS = Map.of(
+        "model",
+        "my_model",
+        "dimensions",
+        256,
+        "similarity",
+        "cosine",
+        "api_key",
+        "my_api_key",
+        "element_type",
+        "bfloat16"
     );
 
     private final Map<String, TaskType> inferenceIds = new HashMap<>();
@@ -157,7 +171,7 @@ public class SemanticTextIndexOptionsIT extends ESIntegTestCase {
         assertThat(actualFieldMappings, equalTo(expectedFieldMapping));
     }
 
-    public void testGetDefaultIndexOptionsBeforeInferenceServiceExists() throws Exception {
+    public void testGetDefaultIndexOptionsWithElementTypeOverride() throws Exception {
         final String inferenceId = randomIdentifier();
         final String inferenceFieldName = "inference_field";
 
@@ -176,7 +190,7 @@ public class SemanticTextIndexOptionsIT extends ESIntegTestCase {
         createInferenceEndpoint(TaskType.TEXT_EMBEDDING, inferenceId, BBQ_COMPATIBLE_SERVICE_SETTINGS);
 
         // We should now be able to get the default index options
-        final Map<String, Object> expectedFieldMapping = generateExpectedFieldMapping(
+        final Map<String, Object> expectedFieldMappingWithDefaults = generateExpectedFieldMapping(
             inferenceFieldName,
             inferenceId,
             new ExtendedDenseVectorIndexOptions(
@@ -186,7 +200,13 @@ public class SemanticTextIndexOptionsIT extends ESIntegTestCase {
         );
 
         actualFieldMappings = filterNullOrEmptyValues(getFieldMappings(inferenceFieldName, true));
-        assertThat(actualFieldMappings, equalTo(expectedFieldMapping));
+        assertThat(actualFieldMappings, equalTo(expectedFieldMappingWithDefaults));
+
+        // If we exclude defaults, index options should not be returned
+        final Map<String, Object> expectedFieldMappingWithoutDefaults = generateExpectedFieldMapping(inferenceFieldName, inferenceId, null);
+
+        actualFieldMappings = getFieldMappings(inferenceFieldName, false);
+        assertThat(actualFieldMappings, equalTo(expectedFieldMappingWithoutDefaults));
     }
 
     public void testSerializeDefaultToBfloat16WithExplicitType() throws Exception {
@@ -223,6 +243,23 @@ public class SemanticTextIndexOptionsIT extends ESIntegTestCase {
         // When include_defaults == true, the BFLOAT16 default should be serialized
         actualFieldMappings = filterNullOrEmptyValues(getFieldMappings(inferenceFieldName, true));
         assertThat(actualFieldMappings, equalTo(expectedFieldMappingWithDefaults));
+    }
+
+    public void testElementTypeExcludedFromDefaultIndexOptionsWhenNoOverride() throws Exception {
+        final String inferenceId = randomIdentifier();
+        final String inferenceFieldName = "inference_field";
+        createInferenceEndpoint(TaskType.TEXT_EMBEDDING, inferenceId, BFLOAT16_SERVICE_SETTINGS);
+        assertAcked(safeGet(prepareCreate(INDEX_NAME).setMapping(generateMapping(inferenceFieldName, inferenceId, null)).execute()));
+
+        // If we didn't default to bfloat16, element_type should be excluded from index options even when include_defaults is true
+        final Map<String, Object> expectedFieldMapping = generateExpectedFieldMapping(
+            inferenceFieldName,
+            inferenceId,
+            SemanticTextFieldMapper.defaultBbqHnswDenseVectorIndexOptions()
+        );
+
+        Map<String, Object> actualFieldMappings = filterNullOrEmptyValues(getFieldMappings(inferenceFieldName, true));
+        assertThat(actualFieldMappings, equalTo(expectedFieldMapping));
     }
 
     private void createInferenceEndpoint(TaskType taskType, String inferenceId, Map<String, Object> serviceSettings) throws IOException {
