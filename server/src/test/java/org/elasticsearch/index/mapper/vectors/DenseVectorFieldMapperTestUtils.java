@@ -13,7 +13,6 @@ import com.carrotsearch.randomizedtesting.RandomizedContext;
 import com.carrotsearch.randomizedtesting.generators.RandomNumbers;
 
 import org.elasticsearch.index.IndexVersion;
-import org.elasticsearch.index.IndexVersions;
 import org.elasticsearch.inference.SimilarityMeasure;
 
 import java.util.Collections;
@@ -21,6 +20,10 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
+
+import static org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.BFLOAT16_DEFAULT_INDEX_OPTIONS;
+import static org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.BFLOAT16_DEFAULT_INDEX_OPTIONS_BACKPORT;
+import static org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.ES_VERSION_94;
 
 public class DenseVectorFieldMapperTestUtils {
     private DenseVectorFieldMapperTestUtils() {}
@@ -64,7 +67,8 @@ public class DenseVectorFieldMapperTestUtils {
     public static Set<DenseVectorFieldMapper.ElementType> elementTypesWithDefaultIndexOptions(IndexVersion indexVersion) {
         Set<DenseVectorFieldMapper.ElementType> elementTypes = new HashSet<>();
         elementTypes.add(DenseVectorFieldMapper.ElementType.FLOAT);
-        if (indexVersion.onOrAfter(IndexVersions.DENSE_VECTOR_BFLOAT16_DEFAULT_INDEX_OPTIONS)) {
+        if (indexVersion.onOrAfter(BFLOAT16_DEFAULT_INDEX_OPTIONS)
+            || indexVersion.between(BFLOAT16_DEFAULT_INDEX_OPTIONS_BACKPORT, ES_VERSION_94)) {
             elementTypes.add(DenseVectorFieldMapper.ElementType.BFLOAT16);
         }
 
