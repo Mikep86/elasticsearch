@@ -1344,19 +1344,23 @@ public class DenseVectorFieldMapperTests extends SyntheticVectorsMapperTestCase 
             int era = randomIntBetween(0, 3);
             IndexVersion indexVersion = switch (era) {
                 case 0 -> IndexVersionUtils.randomVersionBetween(
+                    random(),
                     IndexVersionUtils.getLowestReadCompatibleVersion(),
                     IndexVersionUtils.getPreviousVersion(DenseVectorFieldMapper.DEFAULT_TO_INT8)
                 );
                 case 1 -> IndexVersionUtils.randomVersionBetween(
+                    random(),
                     DenseVectorFieldMapper.DEFAULT_TO_INT8,
                     IndexVersionUtils.getPreviousVersion(DenseVectorFieldMapper.DEFAULT_TO_BBQ)
                 );
                 case 2 -> IndexVersionUtils.randomVersionBetween(
+                    random(),
                     DenseVectorFieldMapper.DEFAULT_TO_BBQ,
-                    IndexVersionUtils.getPreviousVersion(IndexVersions.DENSE_VECTOR_BFLOAT16_DEFAULT_INDEX_OPTIONS)
+                    IndexVersionUtils.getPreviousVersion(DenseVectorFieldMapper.BFLOAT16_DEFAULT_INDEX_OPTIONS_BACKPORT)
                 );
                 case 3 -> IndexVersionUtils.randomVersionBetween(
-                    IndexVersions.DENSE_VECTOR_BFLOAT16_DEFAULT_INDEX_OPTIONS,
+                    random(),
+                    DenseVectorFieldMapper.BFLOAT16_DEFAULT_INDEX_OPTIONS_BACKPORT,
                     IndexVersion.current()
                 );
                 default -> throw new AssertionError("Unexpected value: " + era);

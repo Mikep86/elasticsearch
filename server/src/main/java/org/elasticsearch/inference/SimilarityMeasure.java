@@ -9,8 +9,8 @@
 
 package org.elasticsearch.inference;
 
-import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import org.elasticsearch.TransportVersion;
+import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 
 import java.util.EnumSet;
 import java.util.Locale;
