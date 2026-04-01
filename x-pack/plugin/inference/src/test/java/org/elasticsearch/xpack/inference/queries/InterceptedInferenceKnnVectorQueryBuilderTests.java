@@ -176,12 +176,14 @@ public class InterceptedInferenceKnnVectorQueryBuilderTests extends AbstractInte
         ).boost(3.0f).queryName("bar").addFilterQuery(new TermsQueryBuilder(IndexFieldMapper.NAME, "test-index-*"));
 
         // Perform coordinator node rewrite
-        final QueryRewriteContext queryRewriteContext = createQueryRewriteContext(
+        QueryRewriteContext queryRewriteContext = createQueryRewriteContext(
             Map.of(testIndex1.name(), testIndex1.semanticTextFields(), testIndex2.name(), testIndex2.semanticTextFields()),
             Map.of(),
             TransportVersion.current(),
             null
         );
+        queryRewriteContext = instrumentQueryRewriteContext(queryRewriteContext, assertSingleUniqueAsyncAction(queryRewriteContext));
+
         QueryBuilder coordinatorRewritten = rewriteAndFetch(knnQuery, queryRewriteContext);
 
         // Use a serialization cycle to strip InterceptedQueryBuilderWrapper

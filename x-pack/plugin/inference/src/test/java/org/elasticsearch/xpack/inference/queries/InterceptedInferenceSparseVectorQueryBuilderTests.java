@@ -132,12 +132,14 @@ public class InterceptedInferenceSparseVectorQueryBuilderTests extends AbstractI
         final SparseVectorQueryBuilder sparseVectorQuery = createQueryBuilder(field);
 
         // Perform coordinator node rewrite
-        final QueryRewriteContext queryRewriteContext = createQueryRewriteContext(
+        QueryRewriteContext queryRewriteContext = createQueryRewriteContext(
             Map.of(testIndex1.name(), testIndex1.semanticTextFields(), testIndex2.name(), testIndex2.semanticTextFields()),
             Map.of(),
             TransportVersion.current(),
             null
         );
+        queryRewriteContext = instrumentQueryRewriteContext(queryRewriteContext, assertSingleUniqueAsyncAction(queryRewriteContext));
+
         QueryBuilder coordinatorRewritten = rewriteAndFetch(sparseVectorQuery, queryRewriteContext);
 
         // Use a serialization cycle to strip InterceptedQueryBuilderWrapper
