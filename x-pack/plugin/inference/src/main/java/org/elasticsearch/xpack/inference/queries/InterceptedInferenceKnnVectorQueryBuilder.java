@@ -70,17 +70,17 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
     }
 
     private InterceptedInferenceKnnVectorQueryBuilder(
-        InterceptedInferenceQueryBuilder<KnnVectorQueryBuilder> other,
+        InterceptedInferenceKnnVectorQueryBuilder other,
         Map<FullyQualifiedInferenceId, InferenceResults> inferenceResultsMap,
         PlainActionFuture<InferenceQueryUtils.InferenceInfo> inferenceInfoFuture,
         boolean interceptedCcsRequest
     ) {
         super(other, inferenceResultsMap, inferenceInfoFuture, interceptedCcsRequest);
-        this.queryVectorSupplier = null;
+        this.queryVectorSupplier = other.queryVectorSupplier;
     }
 
     private InterceptedInferenceKnnVectorQueryBuilder(
-        InterceptedInferenceQueryBuilder<KnnVectorQueryBuilder> other,
+        InterceptedInferenceKnnVectorQueryBuilder other,
         KnnVectorQueryBuilder originalQuery,
         SetOnce<float[]> queryVectorSupplier
     ) {

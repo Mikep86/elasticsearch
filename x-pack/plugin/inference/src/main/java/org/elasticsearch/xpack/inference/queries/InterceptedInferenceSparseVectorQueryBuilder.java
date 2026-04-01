@@ -67,17 +67,17 @@ public class InterceptedInferenceSparseVectorQueryBuilder extends InterceptedInf
     }
 
     private InterceptedInferenceSparseVectorQueryBuilder(
-        InterceptedInferenceQueryBuilder<SparseVectorQueryBuilder> other,
+        InterceptedInferenceSparseVectorQueryBuilder other,
         Map<FullyQualifiedInferenceId, InferenceResults> inferenceResultsMap,
         PlainActionFuture<InferenceQueryUtils.InferenceInfo> inferenceInfoFuture,
         boolean interceptedCcsRequest
     ) {
         super(other, inferenceResultsMap, inferenceInfoFuture, interceptedCcsRequest);
-        this.queryVectorSupplier = null;
+        this.queryVectorSupplier = other.queryVectorSupplier;
     }
 
     private InterceptedInferenceSparseVectorQueryBuilder(
-        InterceptedInferenceQueryBuilder<SparseVectorQueryBuilder> other,
+        InterceptedInferenceSparseVectorQueryBuilder other,
         SparseVectorQueryBuilder originalQuery,
         SetOnce<TextExpansionResults> queryVectorSupplier
     ) {
