@@ -672,9 +672,9 @@ public abstract class AbstractInterceptedInferenceQueryBuilderTestCase<T extends
         assertCoordinatorNodeRewriteOnNonInferenceField(originalSerializedQuery, serializedQuery);
     }
 
-    protected static QueryBuilder rewriteAndFetch(QueryBuilder queryBuilder, QueryRewriteContext queryRewriteContext) {
-        PlainActionFuture<QueryBuilder> future = new PlainActionFuture<>();
-        Rewriteable.rewriteAndFetch(queryBuilder, queryRewriteContext, future);
+    protected static <T extends Rewriteable<T>> T rewriteAndFetch(T rewritable, QueryRewriteContext queryRewriteContext) {
+        PlainActionFuture<T> future = new PlainActionFuture<>();
+        Rewriteable.rewriteAndFetch(rewritable, queryRewriteContext, future);
         return future.actionGet();
     }
 
