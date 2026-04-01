@@ -217,7 +217,7 @@ public class SparseVectorQueryBuilder extends LeafQueryBuilder<SparseVectorQuery
     @Override
     protected Query doToQuery(SearchExecutionContext context) throws IOException {
         if (queryVectors == null) {
-            return EMPTY_QUERY_VECTORS;
+            throw new IllegalStateException("query vectors should be set during sparse_vector query rewrite");
         }
 
         final MappedFieldType ft = context.getFieldType(fieldName);
