@@ -144,6 +144,18 @@ public class InterceptedInferenceKnnVectorQueryBuilder extends InterceptedInfere
         return rewritten;
     }
 
+    @Override
+    protected QueryBuilder rewriteToOriginalQuery() {
+        QueryBuilder rewritten = originalQuery;
+        if (queryVectorSupplier != null) {
+            // We are in the process of generating a query vector for the original query. Return the current query builder to allow this to
+            // complete before we rewrite to the original query.
+            rewritten = this;
+        }
+
+        return rewritten;
+    }
+
     private static InterceptedInferenceKnnVectorQueryBuilder rewriteFilterQueries(
         InterceptedInferenceKnnVectorQueryBuilder queryBuilder,
         QueryRewriteContext queryRewriteContext
