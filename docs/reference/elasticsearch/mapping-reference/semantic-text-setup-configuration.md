@@ -119,7 +119,7 @@ When a query targets indices that use different {{infer}} endpoints, {{es}} must
 
 To mitigate this issue, ensure that indices queried together use the same {{infer}} endpoint. You can do this by:
 
-- explicitly setting the `inference_id` when defining the `semantic_text` field for new indeces, or
+- explicitly setting the `inference_id` when defining the `semantic_text` field for new indices, or
 - by [reindexing](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-reindex) older indices with the desired endpoint.
 
 #### Alerts based on raw relevance scores might stop triggering
