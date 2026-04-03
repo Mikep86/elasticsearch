@@ -382,7 +382,7 @@ PUT semantic-embeddings
     "properties": {
       "content": {
         "type": "semantic_text",
-        "inference_id": "my-float-embedding-endpoint"
+        "inference_id": "my-float-embedding-endpoint",
         "index_options": {
           "dense_vector": {
             "element_type": "float" <1>
@@ -404,7 +404,7 @@ PUT semantic-embeddings
     "properties": {
       "content": {
         "type": "semantic_text",
-        "inference_id": "my-float-embedding-endpoint"
+        "inference_id": "my-float-embedding-endpoint",
         "index_options": {
           "dense_vector": {
             "element_type": "float",
