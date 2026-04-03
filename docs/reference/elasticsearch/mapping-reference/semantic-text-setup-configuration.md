@@ -341,6 +341,35 @@ For {{infer}} endpoints that produce `float` embeddings, `semantic_text` fields 
 This reduces the storage required per vector dimension from 4 to 2 bytes with a negligible impact on search relevance for the vast majority of use cases.
 
 The `bfloat16` format uses a 2-byte floating-point encoding that maintains the same value range as 4-byte floats, but with reduced precision.
+You can check if your `semantic_text` field is using `bfloat16` by default by inspecting the default `index_options` for the field using the [get field mapping API](https://www.elastic.co/docs/api/doc/elasticsearch/operation/operation-indices-get-field-mapping):
+
+```console
+GET semantic-embeddings/_mapping/field/content?include_defaults
+```
+
+```console-result
+{
+  "semantic-embeddings": {
+    "mappings": {
+      "content": {
+        "full_name": "content",
+        "mapping": {
+          "content": {
+            "type": "semantic_text",
+            "inference_id": "my-float-embedding-endpoint",
+            "index_options": {
+              "dense_vector": {
+                "element_type": "bfloat16" <1>
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
+1. Indicates that the `semantic_text` field defaulted to the `bfloat16` element type.
 
 #### Override the default element type [index-options-dense_vectors-element-type-override]
 
@@ -353,6 +382,7 @@ PUT semantic-embeddings
     "properties": {
       "content": {
         "type": "semantic_text",
+        "inference_id": "my-float-embedding-endpoint"
         "index_options": {
           "dense_vector": {
             "element_type": "float" <1>
@@ -374,6 +404,7 @@ PUT semantic-embeddings
     "properties": {
       "content": {
         "type": "semantic_text",
+        "inference_id": "my-float-embedding-endpoint"
         "index_options": {
           "dense_vector": {
             "element_type": "float",
