@@ -9,4 +9,5 @@ package org.elasticsearch.xpack.inference.mapper;
 
 import org.elasticsearch.xcontent.XContentType;
 
+// TODO: Remove unnecessary fields
 record SemanticParserContext(boolean useLegacyFormat, String fieldName, XContentType xContentType) {}
