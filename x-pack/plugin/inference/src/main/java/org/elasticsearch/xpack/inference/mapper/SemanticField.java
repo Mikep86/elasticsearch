@@ -48,6 +48,7 @@ public class SemanticField implements ToXContentObject, DenseVectorSupplier {
     public SemanticField(String fieldName, SemanticInferenceResult inference) {
         this.fieldName = Objects.requireNonNull(fieldName);
         this.inference = Objects.requireNonNull(inference);
+        validateInference(inference);
     }
 
     public String fieldName() {
@@ -56,10 +57,6 @@ public class SemanticField implements ToXContentObject, DenseVectorSupplier {
 
     public SemanticInferenceResult inference() {
         return inference;
-    }
-
-    protected void toXContentInference(XContentBuilder builder, Params params) throws IOException {
-        builder.field(INFERENCE_FIELD, inference);
     }
 
     @Override
@@ -94,5 +91,28 @@ public class SemanticField implements ToXContentObject, DenseVectorSupplier {
         }
 
         return chunkVectors;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        SemanticField that = (SemanticField) o;
+        return Objects.equals(fieldName, that.fieldName) && Objects.equals(inference, that.inference);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(fieldName, inference);
+    }
+
+    protected void validateInference(SemanticInferenceResult inference) {
+        if (inference instanceof LegacySemanticTextInferenceResult) {
+            throw new IllegalStateException("Inference cannot use legacy format");
+        }
+    }
+
+    protected void toXContentInference(XContentBuilder builder, Params params) throws IOException {
+        builder.field(INFERENCE_FIELD, inference);
     }
 }
