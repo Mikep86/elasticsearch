@@ -13,6 +13,7 @@ import org.elasticsearch.xcontent.ObjectParser;
 import org.elasticsearch.xcontent.ParseField;
 import org.elasticsearch.xcontent.ToXContentObject;
 import org.elasticsearch.xcontent.XContentBuilder;
+import org.elasticsearch.xcontent.XContentParser;
 import org.elasticsearch.xcontent.XContentType;
 
 import java.io.IOException;
@@ -43,6 +44,10 @@ public class SemanticChunk implements ToXContentObject {
         }, new ParseField(CHUNKED_EMBEDDINGS_FIELD), ObjectParser.ValueType.OBJECT_ARRAY);
     }
 
+    static SemanticChunk parse(SemanticParserContext context, XContentParser parser) throws IOException {
+        return PARSER.parse(parser, context);
+    }
+
     private final int startOffset;
     private final int endOffset;
     private final BytesReference rawEmbeddings;
@@ -51,8 +56,8 @@ public class SemanticChunk implements ToXContentObject {
     public SemanticChunk(int startOffset, int endOffset, BytesReference rawEmbeddings, XContentType contentType) {
         this.startOffset = startOffset;
         this.endOffset = endOffset;
-        this.rawEmbeddings = rawEmbeddings;
-        this.contentType = contentType;
+        this.rawEmbeddings = Objects.requireNonNull(rawEmbeddings);
+        this.contentType = Objects.requireNonNull(contentType);
     }
 
     public int startOffset() {
