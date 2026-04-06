@@ -112,12 +112,10 @@ public class SemanticInferenceResult implements ToXContentObject {
         return inferenceId;
     }
 
-    @Nullable
     public MinimalServiceSettings modelSettings() {
         return modelSettings;
     }
 
-    @Nullable
     public ChunkingSettings chunkingSettings() {
         return chunkingSettings;
     }
