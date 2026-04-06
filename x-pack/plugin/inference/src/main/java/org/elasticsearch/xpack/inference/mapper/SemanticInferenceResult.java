@@ -37,7 +37,7 @@ public class SemanticInferenceResult implements ToXContentObject {
 
     @SuppressWarnings("unchecked")
     private static final ConstructingObjectParser<SemanticInferenceResult, SemanticParserContext> PARSER = new ConstructingObjectParser<>(
-        INFERENCE_ID_FIELD,
+        "semantic_inference_result",
         true,
         args -> {
             String inferenceId = (String) args[0];
