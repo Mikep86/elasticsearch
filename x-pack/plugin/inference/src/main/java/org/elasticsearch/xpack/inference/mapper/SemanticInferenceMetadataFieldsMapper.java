@@ -144,7 +144,7 @@ public class SemanticInferenceMetadataFieldsMapper extends InferenceMetadataFiel
                 var mapper = context.mappingLookup().getMapper(fieldName);
                 if (mapper instanceof SemanticTextFieldMapper fieldMapper) {
                     XContentLocation xContentLocation = context.parser().getTokenLocation();
-                    var input = fieldMapper.parseSemanticTextField(context);
+                    var input = fieldMapper.parseSemanticField(context);
                     if (input != null) {
                         fieldMapper.parseCreateFieldFromContext(context, input, xContentLocation);
                     }

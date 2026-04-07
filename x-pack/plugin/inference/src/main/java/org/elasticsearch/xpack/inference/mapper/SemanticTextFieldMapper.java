@@ -757,34 +757,36 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
             return;
         }
 
-        final SemanticTextField field = parseSemanticTextField(context);
+        final SemanticField field = parseSemanticField(context);
         if (field != null) {
             parseCreateFieldFromContext(context, field, xContentLocation);
         }
     }
 
-    SemanticTextField parseSemanticTextField(DocumentParserContext context) throws IOException {
+    SemanticField parseSemanticField(DocumentParserContext context) throws IOException {
         XContentParser parser = context.parser();
         if (parser.currentToken() == XContentParser.Token.VALUE_NULL) {
             return null;
         }
 
-        SemanticTextField semanticTextField;
+        SemanticField semanticField;
         boolean isWithinLeaf = context.path().isWithinLeafObject();
         try {
             context.path().setWithinLeafObject(true);
-            semanticTextField = SemanticTextField.parse(
-                context.parser(),
-                new SemanticTextField.ParserContext(fieldType().useLegacyFormat, fullPath(), context.parser().contentType())
+            SemanticParserContext parserContext = new SemanticParserContext(
+                fieldType().useLegacyFormat,
+                fullPath(),
+                context.parser().contentType()
             );
+            semanticField = fieldType().useLegacyFormat
+                ? LegacySemanticTextField.parse(parserContext, context.parser())
+                : SemanticField.parse(parserContext, context.parser());
         } finally {
             context.path().setWithinLeafObject(isWithinLeaf);
         }
 
         IndexVersion indexCreatedVersion = context.indexSettings().getIndexVersionCreated();
-        if (semanticTextField != null
-            && semanticTextField.inference().modelSettings() != null
-            && indexCreatedVersion.before(NEW_SPARSE_VECTOR)) {
+        if (semanticField != null && semanticField.inference().modelSettings() != null && indexCreatedVersion.before(NEW_SPARSE_VECTOR)) {
             // Explicitly fail to parse semantic text fields that meet the following criteria:
             // - Are in pre 8.11 indices
             // - Have model settings, indicating that they have embeddings to be indexed
@@ -794,10 +796,10 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
             throw new UnsupportedOperationException(UNSUPPORTED_INDEX_MESSAGE);
         }
 
-        return semanticTextField;
+        return semanticField;
     }
 
-    void parseCreateFieldFromContext(DocumentParserContext context, SemanticTextField field, XContentLocation xContentLocation)
+    void parseCreateFieldFromContext(DocumentParserContext context, SemanticField field, XContentLocation xContentLocation)
         throws IOException {
         final String fullFieldName = fieldType().name();
         if (field.inference().inferenceId().equals(fieldType().getInferenceId()) == false) {
@@ -891,7 +893,7 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
         }
     }
 
-    private SemanticTextFieldMapper addDynamicUpdate(DocumentParserContext context, SemanticTextField field) {
+    private SemanticTextFieldMapper addDynamicUpdate(DocumentParserContext context, SemanticField field) {
         Builder builder = (Builder) getMergeBuilder();
         context.path().remove();
         try {
