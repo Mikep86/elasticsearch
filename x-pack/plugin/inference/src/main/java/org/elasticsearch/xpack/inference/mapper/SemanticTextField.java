@@ -7,11 +7,9 @@
 
 package org.elasticsearch.xpack.inference.mapper;
 
-import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.common.xcontent.XContentParserUtils;
-import org.elasticsearch.common.xcontent.support.XContentMapValues;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.index.IndexVersions;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
@@ -22,8 +20,6 @@ import org.elasticsearch.inference.TaskType;
 import org.elasticsearch.search.diversification.DenseVectorSupplier;
 import org.elasticsearch.search.vectors.VectorData;
 import org.elasticsearch.xcontent.ConstructingObjectParser;
-import org.elasticsearch.xcontent.DeprecationHandler;
-import org.elasticsearch.xcontent.NamedXContentRegistry;
 import org.elasticsearch.xcontent.ObjectParser;
 import org.elasticsearch.xcontent.ParseField;
 import org.elasticsearch.xcontent.ToXContentObject;
@@ -31,7 +27,6 @@ import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentParser;
 import org.elasticsearch.xcontent.XContentParserConfiguration;
 import org.elasticsearch.xcontent.XContentType;
-import org.elasticsearch.xcontent.support.MapXContentParser;
 import org.elasticsearch.xpack.core.inference.chunking.ChunkingSettingsBuilder;
 
 import java.io.IOException;
@@ -111,36 +106,6 @@ public record SemanticTextField(
 
     static SemanticTextField parse(XContentParser parser, ParserContext context) throws IOException {
         return SEMANTIC_TEXT_FIELD_PARSER.parse(parser, context);
-    }
-
-    public static MinimalServiceSettings parseModelSettingsFromMap(Object node) {
-        if (node == null) {
-            return null;
-        }
-        try {
-            Map<String, Object> map = XContentMapValues.nodeMapValue(node, MODEL_SETTINGS_FIELD);
-            XContentParser parser = new MapXContentParser(
-                NamedXContentRegistry.EMPTY,
-                DeprecationHandler.IGNORE_DEPRECATIONS,
-                map,
-                XContentType.JSON
-            );
-            return MinimalServiceSettings.parse(parser);
-        } catch (Exception exc) {
-            throw new ElasticsearchException(exc);
-        }
-    }
-
-    static ChunkingSettings parseChunkingSettingsFromMap(Object node) {
-        if (node == null) {
-            return null;
-        }
-        try {
-            Map<String, Object> map = XContentMapValues.nodeMapValue(node, CHUNKING_SETTINGS_FIELD);
-            return ChunkingSettingsBuilder.fromMap(map, false);
-        } catch (Exception exc) {
-            throw new ElasticsearchException(exc);
-        }
     }
 
     @Override

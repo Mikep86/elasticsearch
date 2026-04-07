@@ -20,6 +20,7 @@ import org.apache.lucene.search.Weight;
 import org.apache.lucene.search.join.BitSetProducer;
 import org.apache.lucene.search.join.ScoreMode;
 import org.apache.lucene.util.BitSet;
+import org.elasticsearch.ElasticsearchException;
 import org.elasticsearch.ResourceNotFoundException;
 import org.elasticsearch.cluster.metadata.InferenceFieldMetadata;
 import org.elasticsearch.common.Explicit;
@@ -77,12 +78,16 @@ import org.elasticsearch.inference.TaskType;
 import org.elasticsearch.search.fetch.StoredFieldsSpec;
 import org.elasticsearch.search.lookup.Source;
 import org.elasticsearch.search.vectors.KnnVectorQueryBuilder;
+import org.elasticsearch.xcontent.DeprecationHandler;
+import org.elasticsearch.xcontent.NamedXContentRegistry;
 import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentFactory;
 import org.elasticsearch.xcontent.XContentLocation;
 import org.elasticsearch.xcontent.XContentParser;
 import org.elasticsearch.xcontent.XContentParserConfiguration;
 import org.elasticsearch.xcontent.XContentType;
+import org.elasticsearch.xcontent.support.MapXContentParser;
+import org.elasticsearch.xpack.core.inference.chunking.ChunkingSettingsBuilder;
 import org.elasticsearch.xpack.core.ml.inference.results.MlDenseEmbeddingResults;
 import org.elasticsearch.xpack.core.ml.inference.results.TextExpansionResults;
 import org.elasticsearch.xpack.core.ml.search.SparseVectorQueryBuilder;
@@ -114,13 +119,13 @@ import static org.elasticsearch.inference.TaskType.SPARSE_EMBEDDING;
 import static org.elasticsearch.inference.TaskType.TEXT_EMBEDDING;
 import static org.elasticsearch.lucene.search.uhighlight.CustomUnifiedHighlighter.MULTIVAL_SEP_CHAR;
 import static org.elasticsearch.search.SearchService.DEFAULT_SIZE;
+import static org.elasticsearch.xpack.inference.mapper.SemanticInferenceResult.CHUNKING_SETTINGS_FIELD;
+import static org.elasticsearch.xpack.inference.mapper.SemanticInferenceResult.MODEL_SETTINGS_FIELD;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.CHUNKED_EMBEDDINGS_FIELD;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.CHUNKED_OFFSET_FIELD;
-import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.CHUNKING_SETTINGS_FIELD;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.CHUNKS_FIELD;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.INFERENCE_FIELD;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.INFERENCE_ID_FIELD;
-import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.MODEL_SETTINGS_FIELD;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.SEARCH_INFERENCE_ID_FIELD;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.TEXT_FIELD;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.getChunksFieldName;
@@ -279,7 +284,7 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
             CHUNKING_SETTINGS_FIELD,
             true,
             () -> null,
-            (n, c, o) -> SemanticTextField.parseChunkingSettingsFromMap(o),
+            (n, c, o) -> parseChunkingSettingsFromMap(o),
             mapper -> ((SemanticTextFieldType) mapper.fieldType()).chunkingSettings,
             XContentBuilder::field,
             Objects::toString
@@ -333,7 +338,7 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
                 MODEL_SETTINGS_FIELD,
                 true,
                 () -> null,
-                (n, c, o) -> SemanticTextField.parseModelSettingsFromMap(o),
+                (n, c, o) -> parseModelSettingsFromMap(o),
                 mapper -> ((SemanticTextFieldType) mapper.fieldType()).modelSettings,
                 (b, n, v) -> {
                     if (v != null) {
@@ -1641,6 +1646,36 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
         }
         conflicts.addConflict("model_settings", "");
         return false;
+    }
+
+    public static MinimalServiceSettings parseModelSettingsFromMap(Object node) {
+        if (node == null) {
+            return null;
+        }
+        try {
+            Map<String, Object> map = XContentMapValues.nodeMapValue(node, MODEL_SETTINGS_FIELD);
+            XContentParser parser = new MapXContentParser(
+                NamedXContentRegistry.EMPTY,
+                DeprecationHandler.IGNORE_DEPRECATIONS,
+                map,
+                XContentType.JSON
+            );
+            return MinimalServiceSettings.parse(parser);
+        } catch (Exception exc) {
+            throw new ElasticsearchException(exc);
+        }
+    }
+
+    private static ChunkingSettings parseChunkingSettingsFromMap(Object node) {
+        if (node == null) {
+            return null;
+        }
+        try {
+            Map<String, Object> map = XContentMapValues.nodeMapValue(node, CHUNKING_SETTINGS_FIELD);
+            return ChunkingSettingsBuilder.fromMap(map, false);
+        } catch (Exception exc) {
+            throw new ElasticsearchException(exc);
+        }
     }
 
     private static SemanticTextIndexOptions parseIndexOptionsFromMap(

@@ -31,7 +31,7 @@ import static org.elasticsearch.xcontent.ConstructingObjectParser.optionalConstr
 
 public class SemanticInferenceResult implements ToXContentObject {
     static final String INFERENCE_ID_FIELD = "inference_id";
-    static final String MODEL_SETTINGS_FIELD = "model_settings";
+    public static final String MODEL_SETTINGS_FIELD = "model_settings";
     static final String CHUNKING_SETTINGS_FIELD = "chunking_settings";
     static final String CHUNKS_FIELD = "chunks";
 

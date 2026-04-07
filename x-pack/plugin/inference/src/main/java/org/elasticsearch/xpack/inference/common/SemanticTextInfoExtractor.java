@@ -15,7 +15,8 @@ import org.elasticsearch.inference.MinimalServiceSettings;
 import org.elasticsearch.transport.Transports;
 import org.elasticsearch.xcontent.ObjectPath;
 import org.elasticsearch.xpack.core.ml.job.persistence.ElasticsearchMappings;
-import org.elasticsearch.xpack.inference.mapper.SemanticTextField;
+import org.elasticsearch.xpack.inference.mapper.SemanticInferenceResult;
+import org.elasticsearch.xpack.inference.mapper.SemanticTextFieldMapper;
 
 import java.util.HashMap;
 import java.util.HashSet;
@@ -63,9 +64,12 @@ public class SemanticTextInfoExtractor {
                 .ifPresent(field -> {
                     MappingMetadata mapping = indexMetadata.mapping();
                     if (mapping != null) {
-                        String[] pathArray = { ElasticsearchMappings.PROPERTIES, field.getName(), SemanticTextField.MODEL_SETTINGS_FIELD };
+                        String[] pathArray = {
+                            ElasticsearchMappings.PROPERTIES,
+                            field.getName(),
+                            SemanticInferenceResult.MODEL_SETTINGS_FIELD };
                         Object modelSettings = ObjectPath.eval(pathArray, mapping.sourceAsMap());
-                        serviceSettingsMap.put(indexName, SemanticTextField.parseModelSettingsFromMap(modelSettings));
+                        serviceSettingsMap.put(indexName, SemanticTextFieldMapper.parseModelSettingsFromMap(modelSettings));
                     }
                 });
         });
