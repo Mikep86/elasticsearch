@@ -8,12 +8,14 @@
 package org.elasticsearch.xpack.inference.mapper;
 
 import org.elasticsearch.common.bytes.BytesReference;
+import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.xcontent.ConstructingObjectParser;
 import org.elasticsearch.xcontent.ObjectParser;
 import org.elasticsearch.xcontent.ParseField;
 import org.elasticsearch.xcontent.ToXContentObject;
 import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentParser;
+import org.elasticsearch.xcontent.XContentParserConfiguration;
 import org.elasticsearch.xcontent.XContentType;
 
 import java.io.IOException;
@@ -82,7 +84,8 @@ public class SemanticChunk implements ToXContentObject {
     }
 
     protected void toXContentEmbeddings(XContentBuilder builder, Params params) throws IOException {
-        builder.field(CHUNKED_EMBEDDINGS_FIELD, rawEmbeddings);
+        XContentParser parser = XContentHelper.createParserNotCompressed(XContentParserConfiguration.EMPTY, rawEmbeddings, contentType);
+        builder.field(CHUNKED_EMBEDDINGS_FIELD).copyCurrentStructure(parser);
     }
 
     @Override
