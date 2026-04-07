@@ -1314,16 +1314,19 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
             }
 
             private List<Object> fetchFullField(Source source, int doc, DocIdSetIterator it) throws IOException {
-                Map<String, List<SemanticTextField.Chunk>> chunkMap = new LinkedHashMap<>();
+                if (useLegacyFormat) {
+                    throw new IllegalStateException("fetchFullField should never be called when using the legacy format");
+                }
 
+                Map<String, List<SemanticChunk>> chunkMap = new LinkedHashMap<>();
                 iterateChildDocs(doc, it, offset -> {
                     var fullChunks = chunkMap.computeIfAbsent(offset.field(), k -> new ArrayList<>());
                     fullChunks.add(
-                        new SemanticTextField.Chunk(
-                            null,
+                        new SemanticChunk(
                             offset.start(),
                             offset.end(),
-                            rawEmbeddings(fieldLoader::write, source.sourceContentType())
+                            rawEmbeddings(fieldLoader::write, source.sourceContentType()),
+                            source.sourceContentType()
                         )
                     );
                 });
@@ -1333,13 +1336,7 @@ public class SemanticTextFieldMapper extends FieldMapper implements InferenceFie
                 }
 
                 return List.of(
-                    new SemanticTextField(
-                        useLegacyFormat,
-                        name(),
-                        null,
-                        new SemanticTextField.InferenceResult(inferenceId, modelSettings, chunkingSettings, chunkMap),
-                        source.sourceContentType()
-                    )
+                    new SemanticField(name(), new SemanticInferenceResult(inferenceId, modelSettings, chunkingSettings, chunkMap))
                 );
             }
 
