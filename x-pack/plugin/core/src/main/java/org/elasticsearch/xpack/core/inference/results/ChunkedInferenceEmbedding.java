@@ -44,7 +44,9 @@ public record ChunkedInferenceEmbedding(List<EmbeddingResults.Chunk> chunks) imp
     public Iterator<Chunk> chunksAsByteReference(XContent xcontent) throws IOException {
         List<Chunk> chunkedInferenceChunks = new ArrayList<>();
         for (EmbeddingResults.Chunk embeddingResultsChunk : chunks()) {
-            chunkedInferenceChunks.add(new Chunk(embeddingResultsChunk.offset(), embeddingResultsChunk.embedding().toBytesRef(xcontent)));
+            chunkedInferenceChunks.add(
+                new Chunk(embeddingResultsChunk.offset(), embeddingResultsChunk.embedding().toBytesRef(xcontent), xcontent.type())
+            );
         }
         return chunkedInferenceChunks.iterator();
     }

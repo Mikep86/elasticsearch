@@ -41,6 +41,7 @@ import org.elasticsearch.xcontent.XContentParserConfiguration;
 import org.elasticsearch.xcontent.XContentType;
 import org.elasticsearch.xpack.inference.mapper.OffsetSourceField;
 import org.elasticsearch.xpack.inference.mapper.OffsetSourceFieldMapper;
+import org.elasticsearch.xpack.inference.mapper.SemanticChunk;
 import org.elasticsearch.xpack.inference.mapper.SemanticTextField;
 import org.elasticsearch.xpack.inference.mapper.SemanticTextFieldMapper;
 
@@ -232,6 +233,26 @@ public class SemanticTextChunkUtils {
             XContentParserConfiguration.EMPTY,
             chunk.rawEmbeddings(),
             contentType
+        );
+
+        // forward to the start token
+        parser.nextToken();
+        VectorData parsedVector = VectorData.parseXContent(parser);
+        if (parsedVector.isFloat()
+            && (elementType == DenseVectorFieldMapper.ElementType.BIT || elementType == DenseVectorFieldMapper.ElementType.BYTE)) {
+            // the parsing created float elements, we need this to be bytes
+            parsedVector = new VectorData(parsedVector.asByteVector());
+        }
+
+        return parsedVector;
+    }
+
+    public static VectorData getTextEmbeddingVectorFromChunk(SemanticChunk chunk, DenseVectorFieldMapper.ElementType elementType)
+        throws IOException {
+        XContentParser parser = XContentHelper.createParserNotCompressed(
+            XContentParserConfiguration.EMPTY,
+            chunk.rawEmbeddings(),
+            chunk.contentType()
         );
 
         // forward to the start token
