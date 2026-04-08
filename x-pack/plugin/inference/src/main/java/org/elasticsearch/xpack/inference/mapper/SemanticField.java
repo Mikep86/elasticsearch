@@ -8,6 +8,7 @@
 package org.elasticsearch.xpack.inference.mapper;
 
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
+import org.elasticsearch.inference.ChunkedInference;
 import org.elasticsearch.inference.TaskType;
 import org.elasticsearch.search.diversification.DenseVectorSupplier;
 import org.elasticsearch.search.vectors.VectorData;
@@ -16,9 +17,11 @@ import org.elasticsearch.xcontent.ParseField;
 import org.elasticsearch.xcontent.ToXContentObject;
 import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentParser;
+import org.elasticsearch.xcontent.XContentType;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
 
@@ -27,6 +30,28 @@ import static org.elasticsearch.xpack.inference.common.chunks.SemanticTextChunkU
 
 public class SemanticField implements ToXContentObject, DenseVectorSupplier {
     static final String INFERENCE_FIELD = "inference";
+
+    /**
+     * Converts the provided {@link ChunkedInference} into a list of {@link SemanticChunk}.
+     */
+    public static List<SemanticChunk> toSemanticChunks(int offsetAdjustment, ChunkedInference results, XContentType contentType)
+        throws IOException {
+        List<SemanticChunk> chunks = new ArrayList<>();
+        Iterator<ChunkedInference.Chunk> it = results.chunksAsByteReference(contentType.xContent());
+        while (it.hasNext()) {
+            chunks.add(toSemanticChunk(offsetAdjustment, it.next()));
+        }
+        return chunks;
+    }
+
+    /**
+     * Converts the provided {@link ChunkedInference.Chunk} into a {@link SemanticChunk}.
+     */
+    public static SemanticChunk toSemanticChunk(int offsetAdjustment, ChunkedInference.Chunk chunk) {
+        int startOffset = chunk.textOffset().start() + offsetAdjustment;
+        int endOffset = chunk.textOffset().end() + offsetAdjustment;
+        return new SemanticChunk(startOffset, endOffset, chunk.bytesReference(), chunk.contentType());
+    }
 
     private static final ConstructingObjectParser<SemanticField, SemanticParserContext> PARSER = new ConstructingObjectParser<>(
         "semantic_field",
