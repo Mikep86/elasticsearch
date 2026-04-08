@@ -319,7 +319,7 @@ public abstract class AbstractXContentTestCase<T extends ToXContent> extends EST
      */
     protected abstract T createTestInstance();
 
-    private T parseInstance(XContentParser parser) throws IOException {
+    protected T parseInstance(XContentParser parser) throws IOException {
         T parsedInstance = doParseInstance(parser);
         assertNull(parser.nextToken());
         return parsedInstance;

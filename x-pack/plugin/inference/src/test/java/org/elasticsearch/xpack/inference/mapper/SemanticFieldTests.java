@@ -12,6 +12,8 @@ import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapperTestUtils;
+import org.elasticsearch.inference.ChunkedInference;
+import org.elasticsearch.inference.ChunkingSettings;
 import org.elasticsearch.inference.EndpointMetadataTests;
 import org.elasticsearch.inference.MinimalServiceSettings;
 import org.elasticsearch.inference.Model;
@@ -45,7 +47,7 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.not;
 
 public class SemanticFieldTests extends AbstractXContentTestCase<SemanticField> {
-    private static final String NAME = "field";
+    protected static final String NAME = "field";
 
     @Override
     protected Predicate<String> getRandomFieldsExcludeFilter() {
@@ -67,33 +69,30 @@ public class SemanticFieldTests extends AbstractXContentTestCase<SemanticField> 
             for (int i = 0; i < entry.getValue().size(); i++) {
                 var actualChunk = entry.getValue().get(i);
                 var expectedChunk = expectedChunks.get(i);
-                assertThat(actualChunk.startOffset(), equalTo(expectedChunk.startOffset()));
-                assertThat(actualChunk.endOffset(), equalTo(expectedChunk.endOffset()));
-                switch (modelSettings.taskType()) {
-                    case TEXT_EMBEDDING -> {
-                        int embeddingLength = DenseVectorFieldMapperTestUtils.getEmbeddingLength(
-                            modelSettings.elementType(),
-                            modelSettings.dimensions()
-                        );
-                        double[] expectedVector = parseDenseVector(
-                            expectedChunk.rawEmbeddings(),
-                            embeddingLength,
-                            expectedChunk.contentType()
-                        );
-                        double[] newVector = parseDenseVector(actualChunk.rawEmbeddings(), embeddingLength, actualChunk.contentType());
-                        assertArrayEquals(expectedVector, newVector, 0.0000001f);
-                    }
-                    case SPARSE_EMBEDDING -> {
-                        List<WeightedToken> expectedTokens = parseWeightedTokens(
-                            expectedChunk.rawEmbeddings(),
-                            expectedChunk.contentType()
-                        );
-                        List<WeightedToken> newTokens = parseWeightedTokens(actualChunk.rawEmbeddings(), actualChunk.contentType());
-                        assertThat(newTokens, equalTo(expectedTokens));
-                    }
-                    default -> throw new AssertionError("Invalid task type " + modelSettings.taskType());
-                }
+                assertEqualChunks(expectedChunk, actualChunk, modelSettings);
             }
+        }
+    }
+
+    protected void assertEqualChunks(SemanticChunk expectedChunk, SemanticChunk actualChunk, MinimalServiceSettings modelSettings) {
+        assertThat(actualChunk.startOffset(), equalTo(expectedChunk.startOffset()));
+        assertThat(actualChunk.endOffset(), equalTo(expectedChunk.endOffset()));
+        switch (modelSettings.taskType()) {
+            case TEXT_EMBEDDING -> {
+                int embeddingLength = DenseVectorFieldMapperTestUtils.getEmbeddingLength(
+                    modelSettings.elementType(),
+                    modelSettings.dimensions()
+                );
+                double[] expectedVector = parseDenseVector(expectedChunk.rawEmbeddings(), embeddingLength, expectedChunk.contentType());
+                double[] newVector = parseDenseVector(actualChunk.rawEmbeddings(), embeddingLength, actualChunk.contentType());
+                assertArrayEquals(expectedVector, newVector, 0.0000001f);
+            }
+            case SPARSE_EMBEDDING -> {
+                List<WeightedToken> expectedTokens = parseWeightedTokens(expectedChunk.rawEmbeddings(), expectedChunk.contentType());
+                List<WeightedToken> newTokens = parseWeightedTokens(actualChunk.rawEmbeddings(), actualChunk.contentType());
+                assertThat(newTokens, equalTo(expectedTokens));
+            }
+            default -> throw new AssertionError("Invalid task type " + modelSettings.taskType());
         }
     }
 
@@ -121,6 +120,20 @@ public class SemanticFieldTests extends AbstractXContentTestCase<SemanticField> 
     @Override
     protected boolean supportsUnknownFields() {
         return false;
+    }
+
+    protected SemanticField createFieldWithModelSettings(MinimalServiceSettings modelSettings) {
+        return new SemanticField(NAME, new SemanticInferenceResult(randomIdentifier(), modelSettings, null, Map.of()));
+    }
+
+    protected SemanticField createFieldFromChunkedInference(
+        Model model,
+        ChunkingSettings chunkingSettings,
+        List<String> inputs,
+        ChunkedInference results,
+        XContentType contentType
+    ) throws IOException {
+        return SemanticFieldTestUtils.semanticFieldFromChunkedInferenceResults(NAME, model, chunkingSettings, inputs, results, contentType);
     }
 
     public void testModelSettingsValidation() {
@@ -176,10 +189,7 @@ public class SemanticFieldTests extends AbstractXContentTestCase<SemanticField> 
             null,
             endpointMetadata
         );
-        final SemanticField semanticField = new SemanticField(
-            NAME,
-            new SemanticInferenceResult("test-inference-id", modelSettings, null, Map.of())
-        );
+        final SemanticField semanticField = createFieldWithModelSettings(modelSettings);
 
         XContentBuilder builder = XContentFactory.jsonBuilder();
         semanticField.toXContent(builder, ToXContent.EMPTY_PARAMS);
@@ -187,7 +197,7 @@ public class SemanticFieldTests extends AbstractXContentTestCase<SemanticField> 
         assertThat(json, not(containsString(EndpointMetadata.METADATA_FIELD_NAME)));
 
         XContentParser parser = createParser(XContentType.JSON.xContent(), json);
-        SemanticField parsed = SemanticField.parse(new SemanticParserContext(false, NAME, parser.contentType()), parser);
+        SemanticField parsed = parseInstance(parser);
         assertThat(parsed.inference().modelSettings().endpointMetadata(), equalTo(EndpointMetadata.EMPTY_INSTANCE));
     }
 
@@ -207,8 +217,7 @@ public class SemanticFieldTests extends AbstractXContentTestCase<SemanticField> 
                 chunkVectors.add(thisVector);
             }
 
-            var field = SemanticFieldTestUtils.semanticFieldFromChunkedInferenceResults(
-                NAME,
+            var field = createFieldFromChunkedInference(
                 model,
                 generateRandomChunkingSettings(),
                 inputs,
