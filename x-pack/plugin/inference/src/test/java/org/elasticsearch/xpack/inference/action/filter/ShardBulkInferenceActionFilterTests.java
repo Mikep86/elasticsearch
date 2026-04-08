@@ -46,9 +46,11 @@ import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapperTestUtils;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.inference.ChunkInferenceInput;
 import org.elasticsearch.inference.ChunkedInference;
+import org.elasticsearch.inference.ChunkingSettings;
 import org.elasticsearch.inference.InferenceService;
 import org.elasticsearch.inference.InferenceServiceRegistry;
 import org.elasticsearch.inference.MinimalServiceSettings;
+import org.elasticsearch.inference.Model;
 import org.elasticsearch.inference.SimilarityMeasure;
 import org.elasticsearch.inference.TaskType;
 import org.elasticsearch.inference.UnparsedModel;
@@ -73,7 +75,12 @@ import org.elasticsearch.xpack.core.inference.results.EmbeddingResults;
 import org.elasticsearch.xpack.core.inference.results.SparseEmbeddingResults;
 import org.elasticsearch.xpack.core.utils.FloatConversionUtils;
 import org.elasticsearch.xpack.inference.InferencePlugin;
+import org.elasticsearch.xpack.inference.mapper.LegacySemanticTextFieldTestUtils;
+import org.elasticsearch.xpack.inference.mapper.SemanticChunk;
+import org.elasticsearch.xpack.inference.mapper.SemanticField;
+import org.elasticsearch.xpack.inference.mapper.SemanticFieldTestUtils;
 import org.elasticsearch.xpack.inference.mapper.SemanticTextField;
+import org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests;
 import org.elasticsearch.xpack.inference.model.TestModel;
 import org.elasticsearch.xpack.inference.registry.ModelRegistry;
 import org.elasticsearch.xpack.inference.services.elastic.ElasticInferenceService;
@@ -102,14 +109,13 @@ import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.awaitLatch
 import static org.elasticsearch.xcontent.ToXContent.EMPTY_PARAMS;
 import static org.elasticsearch.xpack.inference.action.filter.ShardBulkInferenceActionFilter.INDICES_INFERENCE_BATCH_SIZE;
 import static org.elasticsearch.xpack.inference.action.filter.ShardBulkInferenceActionFilter.getIndexRequestOrNull;
+import static org.elasticsearch.xpack.inference.mapper.SemanticFieldTestUtils.randomChunkedInferenceEmbedding;
+import static org.elasticsearch.xpack.inference.mapper.SemanticFieldTestUtils.randomSemanticFieldInput;
 import static org.elasticsearch.xpack.inference.mapper.SemanticFieldTests.parseDenseVector;
 import static org.elasticsearch.xpack.inference.mapper.SemanticFieldTests.parseWeightedTokens;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.getChunksFieldName;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.getOriginalTextFieldName;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldMapperTests.addSemanticTextInferenceResults;
-import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomChunkedInferenceEmbedding;
-import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomSemanticText;
-import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomSemanticTextInput;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.semanticTextFieldFromChunkedInferenceResults;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.emptyArray;
@@ -653,7 +659,16 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
             addSemanticTextInferenceResults(
                 useLegacyFormat,
                 doc5Source,
-                List.of(randomSemanticText(useLegacyFormat, "sparse_field", sparseModel, null, List.of("a test value"), XContentType.JSON))
+                List.of(
+                    SemanticTextFieldTests.randomSemanticText(
+                        useLegacyFormat,
+                        "sparse_field",
+                        sparseModel,
+                        null,
+                        List.of("a test value"),
+                        XContentType.JSON
+                    )
+                )
             );
             doc5Source.endObject();
         }
@@ -1216,6 +1231,49 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
         return clusterService;
     }
 
+    private static SemanticField randomSemanticText(
+        boolean useLegacyFormat,
+        String fieldName,
+        Model model,
+        ChunkingSettings chunkingSettings,
+        List<String> inputs,
+        XContentType contentType
+    ) throws IOException {
+        if (useLegacyFormat) {
+            return LegacySemanticTextFieldTestUtils.randomLegacySemanticTextField(fieldName, model, chunkingSettings, inputs, contentType);
+        }
+        return SemanticFieldTestUtils.randomSemanticField(fieldName, model, chunkingSettings, inputs, contentType);
+    }
+
+    private static SemanticField semanticFieldFromChunkedInferenceResults(
+        boolean useLegacyFormat,
+        String fieldName,
+        Model model,
+        ChunkingSettings chunkingSettings,
+        List<String> inputs,
+        ChunkedInference results,
+        XContentType contentType
+    ) throws IOException {
+        if (useLegacyFormat) {
+            return LegacySemanticTextFieldTestUtils.legacySemanticTextFieldFromChunkedInferenceResults(
+                fieldName,
+                model,
+                chunkingSettings,
+                inputs,
+                results,
+                contentType
+            );
+        }
+        return SemanticFieldTestUtils.semanticFieldFromChunkedInferenceResults(
+            fieldName,
+            model,
+            chunkingSettings,
+            inputs,
+            results,
+            contentType
+        );
+    }
+
     private static BulkItemRequest[] randomBulkItemRequest(
         boolean useLegacyFormat,
         Map<String, StaticModel> modelMap,
@@ -1230,7 +1288,7 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
         for (var entry : fieldInferenceMap.values()) {
             String field = entry.getName();
             var model = modelMap.get(entry.getInferenceId());
-            Object inputObject = randomSemanticTextInput();
+            Object inputObject = randomSemanticFieldInput();
             String inputText = inputObject.toString();
             docMap.put(field, inputObject);
             expectedDocMap.put(field, useLegacyFormat ? inputText : inputObject);
@@ -1239,13 +1297,13 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
                 continue;
             }
 
-            SemanticTextField semanticTextField;
+            SemanticField semanticTextField;
             // The model is not field aware and that is why we are skipping the embedding generation process for existing values.
             // This prevents a situation where embeddings in the expected docMap do not match those in the model, which could happen if
             // embeddings were overwritten.
             if (model.hasResult(inputText)) {
                 var results = model.getResults(inputText);
-                semanticTextField = semanticTextFieldFromChunkedInferenceResults(
+                semanticTextField = semanticFieldFromChunkedInferenceResults(
                     useLegacyFormat,
                     field,
                     model,
@@ -1279,21 +1337,21 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
     private static ChunkedInference toChunkedResult(
         boolean useLegacyFormat,
         Map<String, List<String>> matchedTextMap,
-        SemanticTextField field
+        SemanticField field
     ) {
         switch (field.inference().modelSettings().taskType()) {
             case SPARSE_EMBEDDING -> {
                 List<EmbeddingResults.Chunk> chunks = new ArrayList<>();
                 for (var entry : field.inference().chunks().entrySet()) {
                     String entryField = entry.getKey();
-                    List<SemanticTextField.Chunk> entryChunks = entry.getValue();
+                    List<SemanticChunk> entryChunks = entry.getValue();
                     List<String> entryFieldMatchedText = validateAndGetMatchedTextForField(matchedTextMap, entryField, entryChunks.size());
 
                     ListIterator<String> matchedTextIt = entryFieldMatchedText.listIterator();
                     for (var chunk : entryChunks) {
                         String matchedText = matchedTextIt.next();
                         ChunkedInference.TextOffset offset = createOffset(useLegacyFormat, chunk, matchedText);
-                        var tokens = parseWeightedTokens(chunk.rawEmbeddings(), field.contentType());
+                        var tokens = parseWeightedTokens(chunk.rawEmbeddings(), chunk.contentType());
                         chunks.add(new EmbeddingResults.Chunk(new SparseEmbeddingResults.Embedding(tokens, false), offset));
                     }
                 }
@@ -1309,14 +1367,14 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
                 List<EmbeddingResults.Chunk> chunks = new ArrayList<>();
                 for (var entry : field.inference().chunks().entrySet()) {
                     String entryField = entry.getKey();
-                    List<SemanticTextField.Chunk> entryChunks = entry.getValue();
+                    List<SemanticChunk> entryChunks = entry.getValue();
                     List<String> entryFieldMatchedText = validateAndGetMatchedTextForField(matchedTextMap, entryField, entryChunks.size());
 
                     ListIterator<String> matchedTextIt = entryFieldMatchedText.listIterator();
                     for (var entryChunk : entryChunks) {
                         String matchedText = matchedTextIt.next();
                         ChunkedInference.TextOffset offset = createOffset(useLegacyFormat, entryChunk, matchedText);
-                        double[] values = parseDenseVector(entryChunk.rawEmbeddings(), embeddingLength, field.contentType());
+                        double[] values = parseDenseVector(entryChunk.rawEmbeddings(), embeddingLength, entryChunk.contentType());
                         EmbeddingResults.Embedding<?> embedding = switch (elementType) {
                             case FLOAT, BFLOAT16 -> new DenseEmbeddingFloatResults.Embedding(FloatConversionUtils.floatArrayOf(values));
                             case BYTE, BIT -> new DenseEmbeddingByteResults.Embedding(byteArrayOf(values));
@@ -1347,7 +1405,7 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
 
     /**
      * Create a {@link ChunkedInference.TextOffset} instance with valid offset values. When using the legacy semantic text format, the
-     * offset values are not written to {@link SemanticTextField.Chunk}, so we cannot read them from there. Instead, use the knowledge that
+     * offset values are not written to {@link SemanticChunk}, so we cannot read them from there. Instead, use the knowledge that
      * the matched text corresponds to one complete input value (i.e. one input value -> one chunk) to calculate the offset values.
      *
      * @param useLegacyFormat Whether the old format should be used
@@ -1355,7 +1413,7 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
      * @param matchedText     The matched text to calculate offset values for
      * @return A {@link ChunkedInference.TextOffset} instance with valid offset values
      */
-    private static ChunkedInference.TextOffset createOffset(boolean useLegacyFormat, SemanticTextField.Chunk chunk, String matchedText) {
+    private static ChunkedInference.TextOffset createOffset(boolean useLegacyFormat, SemanticChunk chunk, String matchedText) {
         final int startOffset = useLegacyFormat ? 0 : chunk.startOffset();
         final int endOffset = useLegacyFormat ? matchedText.length() : chunk.endOffset();
 
