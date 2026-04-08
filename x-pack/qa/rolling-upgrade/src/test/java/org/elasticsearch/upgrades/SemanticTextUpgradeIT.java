@@ -21,6 +21,7 @@ import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapperTestUtils;
 import org.elasticsearch.index.query.NestedQueryBuilder;
 import org.elasticsearch.index.query.QueryBuilder;
+import org.elasticsearch.inference.ChunkingSettings;
 import org.elasticsearch.inference.Model;
 import org.elasticsearch.inference.SimilarityMeasure;
 import org.elasticsearch.inference.TaskType;
@@ -32,6 +33,10 @@ import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentFactory;
 import org.elasticsearch.xcontent.XContentType;
 import org.elasticsearch.xpack.core.ml.search.SparseVectorQueryBuilder;
+import org.elasticsearch.xpack.inference.mapper.LegacySemanticTextField;
+import org.elasticsearch.xpack.inference.mapper.LegacySemanticTextFieldTestUtils;
+import org.elasticsearch.xpack.inference.mapper.SemanticField;
+import org.elasticsearch.xpack.inference.mapper.SemanticFieldTestUtils;
 import org.elasticsearch.xpack.inference.mapper.SemanticTextField;
 import org.elasticsearch.xpack.inference.model.TestModel;
 import org.junit.BeforeClass;
@@ -43,8 +48,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldMapperTests.addSemanticTextInferenceResults;
-import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomSemanticText;
 import static org.hamcrest.CoreMatchers.equalTo;
 import static org.hamcrest.CoreMatchers.notNullValue;
 
@@ -134,7 +137,7 @@ public class SemanticTextUpgradeIT extends AbstractUpgradeTestCase {
 
     private void indexDoc(String id, List<String> semanticTextFieldValue) throws IOException {
         final String indexName = getIndexName();
-        final SemanticTextField sparseFieldValue = randomSemanticText(
+        final SemanticField sparseFieldValue = randomSemanticText(
             useLegacyFormat,
             SPARSE_FIELD,
             SPARSE_MODEL,
@@ -142,7 +145,7 @@ public class SemanticTextUpgradeIT extends AbstractUpgradeTestCase {
             semanticTextFieldValue,
             XContentType.JSON
         );
-        final SemanticTextField denseFieldValue = randomSemanticText(
+        final SemanticField denseFieldValue = randomSemanticText(
             useLegacyFormat,
             DENSE_FIELD,
             DENSE_MODEL,
@@ -153,11 +156,7 @@ public class SemanticTextUpgradeIT extends AbstractUpgradeTestCase {
 
         XContentBuilder builder = XContentFactory.jsonBuilder();
         builder.startObject();
-        if (useLegacyFormat == false) {
-            builder.field(sparseFieldValue.fieldName(), semanticTextFieldValue);
-            builder.field(denseFieldValue.fieldName(), semanticTextFieldValue);
-        }
-        addSemanticTextInferenceResults(useLegacyFormat, builder, List.of(sparseFieldValue, denseFieldValue));
+        addSemanticTextToSource(useLegacyFormat, builder, List.of(sparseFieldValue, denseFieldValue), semanticTextFieldValue);
         builder.endObject();
 
         RequestOptions requestOptions = RequestOptions.DEFAULT.toBuilder().addParameter("refresh", "true").build();
@@ -224,6 +223,37 @@ public class SemanticTextUpgradeIT extends AbstractUpgradeTestCase {
 
         Response response = client().performRequest(request);
         return assertOKAndCreateObjectPath(response);
+    }
+
+    private static SemanticField randomSemanticText(
+        boolean useLegacyFormat,
+        String fieldName,
+        Model model,
+        ChunkingSettings chunkingSettings,
+        List<String> inputs,
+        XContentType contentType
+    ) throws IOException {
+        if (useLegacyFormat) {
+            return LegacySemanticTextFieldTestUtils.randomLegacySemanticTextField(fieldName, model, chunkingSettings, inputs, contentType);
+        }
+        return SemanticFieldTestUtils.randomSemanticField(fieldName, model, chunkingSettings, inputs, contentType);
+    }
+
+    private static void addSemanticTextToSource(
+        boolean useLegacyFormat,
+        XContentBuilder builder,
+        List<SemanticField> fields,
+        List<String> fieldValues
+    ) throws IOException {
+        if (useLegacyFormat) {
+            List<LegacySemanticTextField> legacyFields = fields.stream().map(f -> (LegacySemanticTextField) f).toList();
+            LegacySemanticTextFieldTestUtils.addLegacySemanticTextInferenceResults(builder, legacyFields);
+        } else {
+            for (var field : fields) {
+                builder.field(field.fieldName(), fieldValues);
+            }
+            SemanticFieldTestUtils.addSemanticInferenceResults(builder, fields);
+        }
     }
 
     private static void assertQueryResponseWithHighlights(ObjectPath queryObjectPath, String field) throws IOException {
