@@ -17,6 +17,9 @@ import org.elasticsearch.inference.Model;
 import org.elasticsearch.inference.WeightedToken;
 import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentType;
+import org.elasticsearch.xpack.core.inference.chunking.NoneChunkingSettings;
+import org.elasticsearch.xpack.core.inference.chunking.SentenceBoundaryChunkingSettings;
+import org.elasticsearch.xpack.core.inference.chunking.WordBoundaryChunkingSettings;
 import org.elasticsearch.xpack.core.inference.results.ChunkedInferenceEmbedding;
 import org.elasticsearch.xpack.core.inference.results.DenseEmbeddingByteResults;
 import org.elasticsearch.xpack.core.inference.results.DenseEmbeddingFloatResults;
@@ -30,9 +33,15 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.apache.lucene.tests.util.LuceneTestCase.rarely;
+import static org.elasticsearch.test.ESTestCase.randomAlphaOfLengthBetween;
+import static org.elasticsearch.test.ESTestCase.randomBoolean;
 import static org.elasticsearch.test.ESTestCase.randomByte;
+import static org.elasticsearch.test.ESTestCase.randomDouble;
 import static org.elasticsearch.test.ESTestCase.randomFloat;
+import static org.elasticsearch.test.ESTestCase.randomInt;
 import static org.elasticsearch.test.ESTestCase.randomIntBetween;
+import static org.elasticsearch.test.ESTestCase.randomLong;
 
 public class SemanticFieldTestUtils {
     private SemanticFieldTestUtils() {}
@@ -183,5 +192,39 @@ public class SemanticFieldTestUtils {
             values[j] = (byte) Math.max(1, randomByte());
         }
         return values;
+    }
+
+    public static ChunkingSettings generateRandomChunkingSettings() {
+        return generateRandomChunkingSettings(true);
+    }
+
+    public static ChunkingSettings generateRandomChunkingSettings(boolean allowNull) {
+        if (allowNull && randomBoolean()) {
+            return null; // Use model defaults
+        }
+        return switch (randomIntBetween(0, 2)) {
+            case 0 -> NoneChunkingSettings.INSTANCE;
+            case 1 -> new WordBoundaryChunkingSettings(randomIntBetween(20, 100), randomIntBetween(1, 10));
+            case 2 -> new SentenceBoundaryChunkingSettings(randomIntBetween(20, 100), randomIntBetween(0, 1));
+            default -> throw new IllegalStateException("Illegal state while generating random chunking settings");
+        };
+    }
+
+    /**
+     * Returns a randomly generated object for semantic field tests.
+     */
+    public static Object randomSemanticFieldInput() {
+        if (rarely()) {
+            return switch (randomIntBetween(0, 4)) {
+                case 0 -> randomInt();
+                case 1 -> randomLong();
+                case 2 -> randomFloat();
+                case 3 -> randomBoolean();
+                case 4 -> randomDouble();
+                default -> throw new IllegalStateException("Illegal state while generating random semantic field input");
+            };
+        } else {
+            return randomAlphaOfLengthBetween(10, 20);
+        }
     }
 }
