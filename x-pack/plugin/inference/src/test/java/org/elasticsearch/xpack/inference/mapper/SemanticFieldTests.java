@@ -231,7 +231,7 @@ public class SemanticFieldTests extends AbstractXContentTestCase<SemanticField> 
         }
     }
 
-    private static double[] parseDenseVector(BytesReference value, int numDims, XContentType contentType) {
+    public static double[] parseDenseVector(BytesReference value, int numDims, XContentType contentType) {
         try (XContentParser parser = XContentHelper.createParserNotCompressed(XContentParserConfiguration.EMPTY, value, contentType)) {
             parser.nextToken();
             assertThat(parser.currentToken(), equalTo(XContentParser.Token.START_ARRAY));
@@ -247,7 +247,7 @@ public class SemanticFieldTests extends AbstractXContentTestCase<SemanticField> 
         }
     }
 
-    private static List<WeightedToken> parseWeightedTokens(BytesReference value, XContentType contentType) {
+    public static List<WeightedToken> parseWeightedTokens(BytesReference value, XContentType contentType) {
         try (XContentParser parser = XContentHelper.createParserNotCompressed(XContentParserConfiguration.EMPTY, value, contentType)) {
             Map<String, Object> map = parser.map();
             List<WeightedToken> weightedTokens = new ArrayList<>();
