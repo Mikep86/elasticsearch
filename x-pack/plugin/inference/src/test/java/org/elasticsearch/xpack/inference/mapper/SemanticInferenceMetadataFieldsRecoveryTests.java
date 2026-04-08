@@ -27,7 +27,6 @@ import org.elasticsearch.index.mapper.MapperService;
 import org.elasticsearch.index.mapper.SourceFieldMapper;
 import org.elasticsearch.index.mapper.SourceToParse;
 import org.elasticsearch.index.translog.Translog;
-import org.elasticsearch.inference.ChunkedInference;
 import org.elasticsearch.inference.ChunkingSettings;
 import org.elasticsearch.inference.Model;
 import org.elasticsearch.inference.SimilarityMeasure;
@@ -43,11 +42,9 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
+import static org.elasticsearch.xpack.inference.mapper.SemanticFieldTestUtils.addSemanticInferenceResults;
+import static org.elasticsearch.xpack.inference.mapper.SemanticFieldTestUtils.randomSemanticField;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.generateRandomChunkingSettings;
-import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomChunkedInferenceEmbeddingByte;
-import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomChunkedInferenceEmbeddingFloat;
-import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomChunkedInferenceEmbeddingSparse;
-import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.semanticTextFieldFromChunkedInferenceResults;
 import static org.hamcrest.Matchers.equalTo;
 
 public class SemanticInferenceMetadataFieldsRecoveryTests extends EngineTestCase {
@@ -245,43 +242,15 @@ public class SemanticInferenceMetadataFieldsRecoveryTests extends EngineTestCase
         if (rarely()) {
             return BytesReference.bytes(builder.endObject());
         }
-        SemanticTextFieldMapperTests.addSemanticTextInferenceResults(
-            false,
+        addSemanticInferenceResults(
             builder,
             List.of(
-                randomSemanticText(false, "semantic_2", model2, chunkingSettings, randomInputs(), XContentType.JSON),
-                randomSemanticText(false, "semantic_1", model1, chunkingSettings, randomInputs(), XContentType.JSON)
+                randomSemanticField("semantic_2", model2, chunkingSettings, randomInputs(), XContentType.JSON),
+                randomSemanticField("semantic_1", model1, chunkingSettings, randomInputs(), XContentType.JSON)
             )
         );
         builder.endObject();
         return BytesReference.bytes(builder);
-    }
-
-    private static SemanticTextField randomSemanticText(
-        boolean useLegacyFormat,
-        String fieldName,
-        Model model,
-        ChunkingSettings chunkingSettings,
-        List<String> inputs,
-        XContentType contentType
-    ) throws IOException {
-        ChunkedInference results = switch (model.getTaskType()) {
-            case TEXT_EMBEDDING -> switch (model.getServiceSettings().elementType()) {
-                case FLOAT, BFLOAT16 -> randomChunkedInferenceEmbeddingFloat(model, inputs);
-                case BYTE, BIT -> randomChunkedInferenceEmbeddingByte(model, inputs);
-            };
-            case SPARSE_EMBEDDING -> randomChunkedInferenceEmbeddingSparse(inputs, false);
-            default -> throw new AssertionError("invalid task type: " + model.getTaskType().name());
-        };
-        return semanticTextFieldFromChunkedInferenceResults(
-            useLegacyFormat,
-            fieldName,
-            model,
-            chunkingSettings,
-            inputs,
-            results,
-            contentType
-        );
     }
 
     private static List<String> randomInputs() {

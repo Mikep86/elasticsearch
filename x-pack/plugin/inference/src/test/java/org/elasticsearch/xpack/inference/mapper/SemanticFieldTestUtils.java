@@ -7,6 +7,7 @@
 
 package org.elasticsearch.xpack.inference.mapper;
 
+import org.elasticsearch.index.mapper.InferenceMetadataFieldsMapper;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapperTestUtils;
 import org.elasticsearch.inference.ChunkedInference;
@@ -14,6 +15,7 @@ import org.elasticsearch.inference.ChunkingSettings;
 import org.elasticsearch.inference.MinimalServiceSettings;
 import org.elasticsearch.inference.Model;
 import org.elasticsearch.inference.WeightedToken;
+import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentType;
 import org.elasticsearch.xpack.core.inference.results.ChunkedInferenceEmbedding;
 import org.elasticsearch.xpack.core.inference.results.DenseEmbeddingByteResults;
@@ -24,6 +26,7 @@ import org.elasticsearch.xpack.core.inference.results.SparseEmbeddingResults;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -33,6 +36,16 @@ import static org.elasticsearch.test.ESTestCase.randomIntBetween;
 
 public class SemanticFieldTestUtils {
     private SemanticFieldTestUtils() {}
+
+    public static void addSemanticInferenceResults(XContentBuilder sourceBuilder, List<SemanticField> semanticInferenceResults)
+        throws IOException {
+        // Use a linked hash map to maintain insertion-order iteration over the inference fields
+        Map<String, Object> inferenceMetadataFields = new LinkedHashMap<>();
+        for (var field : semanticInferenceResults) {
+            inferenceMetadataFields.put(field.fieldName(), field);
+        }
+        sourceBuilder.field(InferenceMetadataFieldsMapper.NAME, inferenceMetadataFields);
+    }
 
     public static SemanticField randomSemanticField(
         String fieldName,
