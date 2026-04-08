@@ -54,7 +54,7 @@ import java.util.function.Function;
 
 import static org.elasticsearch.xpack.inference.Utils.storeModel;
 import static org.elasticsearch.xpack.inference.action.filter.ShardBulkInferenceActionFilter.INDICES_INFERENCE_BATCH_SIZE;
-import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomSemanticTextInput;
+import static org.elasticsearch.xpack.inference.mapper.SemanticFieldTestUtils.randomSemanticFieldInput;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
 
@@ -142,8 +142,8 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
             """, "sparse-endpoint", "dense-endpoint")).get();
         assertRandomBulkOperations(INDEX_NAME, isIndexRequest -> {
             Map<String, Object> map = new HashMap<>();
-            map.put("sparse_field", isIndexRequest && rarely() ? null : randomSemanticTextInput());
-            map.put("dense_field", isIndexRequest && rarely() ? null : randomSemanticTextInput());
+            map.put("sparse_field", isIndexRequest && rarely() ? null : randomSemanticFieldInput());
+            map.put("dense_field", isIndexRequest && rarely() ? null : randomSemanticFieldInput());
             return map;
         });
     }
@@ -223,8 +223,8 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
 
         assertRandomBulkOperations("index_restart", isIndexRequest -> {
             Map<String, Object> map = new HashMap<>();
-            map.put("sparse_field", isIndexRequest && rarely() ? null : randomSemanticTextInput());
-            map.put("other_field", isIndexRequest && rarely() ? null : randomSemanticTextInput());
+            map.put("sparse_field", isIndexRequest && rarely() ? null : randomSemanticFieldInput());
+            map.put("other_field", isIndexRequest && rarely() ? null : randomSemanticFieldInput());
             return map;
         });
 
@@ -233,8 +233,8 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
 
         assertRandomBulkOperations("index_restart", isIndexRequest -> {
             Map<String, Object> map = new HashMap<>();
-            map.put("sparse_field", isIndexRequest && rarely() ? null : randomSemanticTextInput());
-            map.put("other_field", isIndexRequest && rarely() ? null : randomSemanticTextInput());
+            map.put("sparse_field", isIndexRequest && rarely() ? null : randomSemanticFieldInput());
+            map.put("other_field", isIndexRequest && rarely() ? null : randomSemanticFieldInput());
             return map;
         });
     }

@@ -39,7 +39,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomSemanticTextInput;
+import static org.elasticsearch.xpack.inference.mapper.SemanticFieldTestUtils.randomSemanticFieldInput;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.instanceOf;
 
@@ -113,8 +113,8 @@ public class ShardBulkInferenceActionFilterBasicLicenseIT extends ESIntegTestCas
         int totalBulkReqs = randomIntBetween(2, 100);
         for (int i = 0; i < totalBulkReqs; i++) {
             Map<String, Object> source = new HashMap<>();
-            source.put("sparse_field", randomSemanticTextInput());
-            source.put("dense_field", randomSemanticTextInput());
+            source.put("sparse_field", randomSemanticFieldInput());
+            source.put("dense_field", randomSemanticFieldInput());
 
             bulkRequest.add(new IndexRequestBuilder(client()).setIndex(INDEX_NAME).setId(Long.toString(i)).setSource(source));
         }
