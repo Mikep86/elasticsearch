@@ -79,6 +79,14 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
 
     static final String INDEX_OPTIONS_FIELD = "index_options";
 
+    private static final DenseVectorMapperConfigurator DENSE_VECTOR_MAPPER_CONFIGURATOR = new DenseVectorMapperConfigurator(
+        (indexVersion, modelElementType) -> defaultElementTypeToBfloat16(modelElementType)
+            ? DenseVectorFieldMapper.ElementType.BFLOAT16
+            : modelElementType,
+        (indexVersion, modelSimilarity) -> modelSimilarity != null ? modelSimilarity.vectorSimilarity() : null,
+        (indexVersion, modelSettings) -> null
+    );
+
     public static class Builder extends FieldMapper.Builder {
         protected final Function<Query, BitSetProducer> bitSetProducer;
         protected final ModelRegistry modelRegistry;
@@ -304,8 +312,10 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
                 experimentalFeaturesEnabled,
                 vectorsFormatProviders
             );
-            // TODO: Configure dense vector mapper
-            // TODO: Default element type to bfloat16
+            ExtendedDenseVectorIndexOptions extendedIndexOptions = indexOptions.get() != null
+                ? getExtendedDenseVectorIndexOptions(indexOptions.get())
+                : null;
+            DENSE_VECTOR_MAPPER_CONFIGURATOR.configure(denseVectorMapperBuilder, indexVersionCreated, modelSettings, extendedIndexOptions);
 
             return denseVectorMapperBuilder;
         }
@@ -758,5 +768,9 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
         }
 
         throw new IllegalStateException("Unexpected inner index options type [" + innerIndexOptions.getClass().getSimpleName() + "]");
+    }
+
+    private static boolean defaultElementTypeToBfloat16(DenseVectorFieldMapper.ElementType modelElementType) {
+        return modelElementType == DenseVectorFieldMapper.ElementType.FLOAT;
     }
 }

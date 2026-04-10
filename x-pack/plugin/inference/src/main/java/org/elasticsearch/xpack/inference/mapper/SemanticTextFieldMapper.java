@@ -56,7 +56,6 @@ import org.elasticsearch.index.query.SearchExecutionContext;
 import org.elasticsearch.inference.ChunkingSettings;
 import org.elasticsearch.inference.InferenceResults;
 import org.elasticsearch.inference.MinimalServiceSettings;
-import org.elasticsearch.inference.SimilarityMeasure;
 import org.elasticsearch.inference.TaskType;
 import org.elasticsearch.logging.LogManager;
 import org.elasticsearch.logging.Logger;
@@ -150,6 +149,19 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
     public static final String DEFAULT_EIS_JINA_V5_INFERENCE_ID = DEFAULT_JINA_V5_ENDPOINT_ID;
 
     public static final float DEFAULT_RESCORE_OVERSAMPLE = 3.0f;
+
+    private static final DenseVectorMapperConfigurator DENSE_VECTOR_MAPPER_CONFIGURATOR = new DenseVectorMapperConfigurator(
+        (indexVersion, modelElementType) -> defaultElementTypeToBfloat16(indexVersion, modelElementType)
+            ? DenseVectorFieldMapper.ElementType.BFLOAT16
+            : modelElementType,
+        (indexVersion, modelSimilarity) -> {
+            // Skip setting similarity on pre 8.11 indices. It causes dense vector field creation to fail because similarity can only be set
+            // on indexed fields, which is not done by default prior to 8.11. The fact that the dense vector field is partially configured
+            // is moot because we will explicitly fail to index docs into this semantic text field anyways.
+            return indexVersion.onOrAfter(NEW_SPARSE_VECTOR) && modelSimilarity != null ? modelSimilarity.vectorSimilarity() : null;
+        },
+        SemanticTextFieldMapper::defaultDenseVectorIndexOptions
+    );
 
     /**
      * An index setting that allows users to pin the default inference ID for {@code semantic_text} fields that do not declare an explicit
@@ -354,7 +366,15 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
                         experimentalFeaturesEnabled,
                         vectorsFormatProviders
                     );
-                    configureDenseVectorMapperBuilder(indexVersionCreated, denseVectorMapperBuilder, modelSettings, indexOptions.get());
+                    ExtendedDenseVectorIndexOptions extendedIndexOptions = indexOptions.get() != null
+                        ? getExtendedDenseVectorIndexOptions(indexOptions.get())
+                        : null;
+                    DENSE_VECTOR_MAPPER_CONFIGURATOR.configure(
+                        denseVectorMapperBuilder,
+                        indexVersionCreated,
+                        modelSettings,
+                        extendedIndexOptions
+                    );
                     yield denseVectorMapperBuilder;
                 }
                 default -> throw new IllegalArgumentException(
@@ -1056,58 +1076,6 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
                 sparseVectorMapperBuilder.setIndexOptions(defaultIndexOptions);
             }
         }
-    }
-
-    private static void configureDenseVectorMapperBuilder(
-        IndexVersion indexVersionCreated,
-        DenseVectorFieldMapper.Builder denseVectorMapperBuilder,
-        MinimalServiceSettings modelSettings,
-        SemanticTextIndexOptions indexOptions
-    ) {
-        // Skip setting similarity on pre 8.11 indices. It causes dense vector field creation to fail because similarity can only be set
-        // on indexed fields, which is not done by default prior to 8.11. The fact that the dense vector field is partially configured is
-        // moot because we will explicitly fail to index docs into this semantic text field anyways.
-        if (indexVersionCreated.onOrAfter(NEW_SPARSE_VECTOR)) {
-            SimilarityMeasure similarity = modelSettings.similarity();
-            if (similarity != null) {
-                denseVectorMapperBuilder.similarity(similarity.vectorSimilarity());
-            }
-        }
-
-        assert modelSettings.dimensions() != null : "Model settings should have dimensions set by now for text embedding models";
-        denseVectorMapperBuilder.dimensions(modelSettings.dimensions());
-        // Here is where we persist index_options. If they are specified by the user, we will use those index_options,
-        // otherwise we will determine if we can set default index options. If we can't, we won't persist any index_options
-        // and the field will use the defaults for the dense_vector field.
-        DenseVectorFieldMapper.ElementType resolvedElementType = defaultElementTypeToBfloat16(
-            indexVersionCreated,
-            modelSettings.elementType()
-        ) ? DenseVectorFieldMapper.ElementType.BFLOAT16 : modelSettings.elementType();
-        if (indexOptions != null) {
-            ExtendedDenseVectorIndexOptions innerIndexOptions = getExtendedDenseVectorIndexOptions(indexOptions);
-            DenseVectorFieldMapper.DenseVectorIndexOptions denseVectorIndexOptions = innerIndexOptions.getBaseIndexOptions();
-            if (innerIndexOptions.getElementType() != null) {
-                resolvedElementType = innerIndexOptions.getElementType();
-            }
-
-            if (denseVectorIndexOptions == null) {
-                denseVectorIndexOptions = defaultDenseVectorIndexOptions(indexVersionCreated, modelSettings);
-            }
-
-            if (denseVectorIndexOptions != null) {
-                denseVectorMapperBuilder.indexOptions(denseVectorIndexOptions);
-                denseVectorIndexOptions.validate(resolvedElementType, modelSettings.dimensions(), true);
-            }
-        } else {
-            DenseVectorFieldMapper.DenseVectorIndexOptions defaultIndexOptions = defaultDenseVectorIndexOptions(
-                indexVersionCreated,
-                modelSettings
-            );
-            if (defaultIndexOptions != null) {
-                denseVectorMapperBuilder.indexOptions(defaultIndexOptions);
-            }
-        }
-        denseVectorMapperBuilder.elementType(resolvedElementType);
     }
 
     static DenseVectorFieldMapper.DenseVectorIndexOptions defaultDenseVectorIndexOptions(
