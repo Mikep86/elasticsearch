@@ -489,25 +489,6 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
         protected Logger logger() {
             return SemanticTextFieldMapper.logger;
         }
-
-        private static void validateElementTypeOverride(
-            DenseVectorFieldMapper.ElementType modelElementType,
-            DenseVectorFieldMapper.ElementType overrideElementType
-        ) {
-            boolean valid;
-            if (modelElementType == DenseVectorFieldMapper.ElementType.FLOAT) {
-                valid = overrideElementType == DenseVectorFieldMapper.ElementType.FLOAT
-                    || overrideElementType == DenseVectorFieldMapper.ElementType.BFLOAT16;
-            } else {
-                valid = overrideElementType == modelElementType;
-            }
-
-            if (valid == false) {
-                throw new IllegalArgumentException(
-                    "Model element type [" + modelElementType + "] is incompatible with element type override [" + overrideElementType + "]"
-                );
-            }
-        }
     }
 
     private SemanticTextFieldMapper(

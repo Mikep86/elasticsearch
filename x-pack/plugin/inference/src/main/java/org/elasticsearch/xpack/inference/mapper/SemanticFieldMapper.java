@@ -38,6 +38,7 @@ import org.elasticsearch.index.mapper.ObjectMapper;
 import org.elasticsearch.index.mapper.SimpleMappedFieldType;
 import org.elasticsearch.index.mapper.ValueFetcher;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
+import org.elasticsearch.index.mapper.vectors.IndexOptions;
 import org.elasticsearch.index.mapper.vectors.VectorsFormatProvider;
 import org.elasticsearch.index.query.NestedQueryBuilder;
 import org.elasticsearch.index.query.SearchExecutionContext;
@@ -207,10 +208,7 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
                 () -> null,
                 (n, c, o) -> parseIndexOptionsFromMap(n, o, c.indexVersionCreated(), experimentalFeaturesEnabled),
                 mapper -> ((SemanticFieldType) mapper.fieldType()).indexOptions,
-                (b, n, v) -> {
-                    // TODO: Implement
-                    throw new UnsupportedOperationException("Unimplemented");
-                },
+                XContentBuilder::field, // TODO: Customize how default index options are serialized
                 Objects::toString
             ).acceptsNull();
         }
@@ -307,6 +305,7 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
                 vectorsFormatProviders
             );
             // TODO: Configure dense vector mapper
+            // TODO: Default element type to bfloat16
 
             return denseVectorMapperBuilder;
         }
@@ -436,8 +435,32 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
         }
 
         protected void validateIndexOptions(MinimalServiceSettings modelSettings) {
-            // TODO: Implement
-            throw new UnsupportedOperationException("Unimplemented");
+            SemanticTextIndexOptions indexOptions = this.indexOptions.get();
+            String inferenceId = this.inferenceId.get();
+
+            if (indexOptions == null) {
+                return;
+            } else if (modelSettings == null) {
+                throw new IllegalArgumentException(
+                    "Model settings must be set to validate index options for inference ID [" + inferenceId + "]"
+                );
+            } else if (indexOptions.type() != SemanticTextIndexOptions.SupportedIndexOptions.DENSE_VECTOR) {
+                throw new IllegalArgumentException(
+                    "[" + contentType() + "] field [" + leafName() + "] does not support [" + indexOptions.type() + "] index options"
+                );
+            }
+
+            DenseVectorFieldMapper.ElementType elementType = modelSettings.elementType();
+            ExtendedDenseVectorIndexOptions innerIndexOptions = getExtendedDenseVectorIndexOptions(indexOptions);
+            if (innerIndexOptions.getElementType() != null) {
+                validateElementTypeOverride(elementType, innerIndexOptions.getElementType());
+                elementType = innerIndexOptions.getElementType();
+            }
+
+            DenseVectorFieldMapper.DenseVectorIndexOptions denseVectorIndexOptions = innerIndexOptions.getBaseIndexOptions();
+            if (denseVectorIndexOptions != null) {
+                denseVectorIndexOptions.validate(elementType, modelSettings.dimensions(), true);
+            }
         }
 
         protected SemanticFieldMapper buildMapper(String fullName, ObjectMapper inferenceField, BuilderParams builderParams) {
@@ -461,6 +484,25 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
 
         protected Logger logger() {
             return SemanticFieldMapper.logger;
+        }
+
+        protected static void validateElementTypeOverride(
+            DenseVectorFieldMapper.ElementType modelElementType,
+            DenseVectorFieldMapper.ElementType overrideElementType
+        ) {
+            boolean valid;
+            if (modelElementType == DenseVectorFieldMapper.ElementType.FLOAT) {
+                valid = overrideElementType == DenseVectorFieldMapper.ElementType.FLOAT
+                    || overrideElementType == DenseVectorFieldMapper.ElementType.BFLOAT16;
+            } else {
+                valid = overrideElementType == modelElementType;
+            }
+
+            if (valid == false) {
+                throw new IllegalArgumentException(
+                    "Model element type [" + modelElementType + "] is incompatible with element type override [" + overrideElementType + "]"
+                );
+            }
         }
     }
 
@@ -707,5 +749,14 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
             indexOptions,
             indexOptions.parseIndexOptions(fieldName, indexOptionsMap, indexVersion, experimentalFeaturesEnabled)
         );
+    }
+
+    protected static ExtendedDenseVectorIndexOptions getExtendedDenseVectorIndexOptions(SemanticTextIndexOptions indexOptions) {
+        IndexOptions innerIndexOptions = indexOptions.indexOptions();
+        if (innerIndexOptions instanceof ExtendedDenseVectorIndexOptions edvio) {
+            return edvio;
+        }
+
+        throw new IllegalStateException("Unexpected inner index options type [" + innerIndexOptions.getClass().getSimpleName() + "]");
     }
 }
