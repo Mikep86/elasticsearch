@@ -40,7 +40,6 @@ import org.elasticsearch.index.mapper.KeywordFieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperBuilderContext;
-import org.elasticsearch.index.mapper.MapperMergeContext;
 import org.elasticsearch.index.mapper.MappingLookup;
 import org.elasticsearch.index.mapper.MappingParserContext;
 import org.elasticsearch.index.mapper.NestedObjectMapper;
@@ -333,83 +332,6 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
         }
 
         @Override
-        protected void mergeFromBuilder(FieldMapper.Builder incoming, Conflicts conflicts, MapperMergeContext mergeContext) {
-            Builder semanticIncoming = (Builder) incoming;
-
-            final boolean isInferenceIdUpdate = semanticIncoming.inferenceId.get().equals(inferenceId.get()) == false;
-            final boolean hasExplicitModelSettings = modelSettings.get() != null;
-
-            if (isInferenceIdUpdate && hasExplicitModelSettings) {
-                validateModelsAreCompatibleWhenInferenceIdIsUpdated(semanticIncoming.inferenceId.get(), conflicts);
-                // As the mapper previously had explicit model settings, we need to apply to the new merged mapper
-                // the resolved model settings if not explicitly set.
-                if (semanticIncoming.modelSettings.get() == null) {
-                    semanticIncoming.setModelSettings(modelRegistry.getMinimalServiceSettings(semanticIncoming.inferenceId.get()));
-                }
-            } else if (semanticIncoming.modelSettings.get() == null && modelSettings.get() != null) {
-                semanticIncoming.setModelSettings(modelSettings.get());
-            }
-
-            // We make sure to merge the inference field first to catch any model conflicts.
-            // If inference_id is updated and there are no explicit model settings, we should be
-            // able to switch to the new inference field without the need to check for conflicts.
-            if (isInferenceIdUpdate == false || hasExplicitModelSettings) {
-                mergeInferenceFieldFromBuilder(mergeContext, semanticIncoming);
-            }
-
-            super.mergeFromBuilder(incoming, conflicts, mergeContext);
-            conflicts.check();
-        }
-
-        private void validateModelsAreCompatibleWhenInferenceIdIsUpdated(String newInferenceId, Conflicts conflicts) {
-            MinimalServiceSettings currentModelSettings = modelSettings.get();
-            MinimalServiceSettings updatedModelSettings = modelRegistry.getMinimalServiceSettings(newInferenceId);
-            if (currentModelSettings != null && updatedModelSettings == null) {
-                throw new IllegalArgumentException(
-                    "Cannot update ["
-                        + CONTENT_TYPE
-                        + "] field ["
-                        + leafName()
-                        + "] because inference endpoint ["
-                        + newInferenceId
-                        + "] does not exist."
-                );
-            }
-            if (canMergeModelSettings(currentModelSettings, updatedModelSettings, conflicts) == false) {
-                throw new IllegalArgumentException(
-                    "Cannot update ["
-                        + CONTENT_TYPE
-                        + "] field ["
-                        + leafName()
-                        + "] because inference endpoint ["
-                        + inferenceId.get()
-                        + "] with model settings ["
-                        + currentModelSettings
-                        + "] is not compatible with new inference endpoint ["
-                        + newInferenceId
-                        + "] with model settings ["
-                        + updatedModelSettings
-                        + "]."
-                );
-            }
-        }
-
-        private void mergeInferenceFieldFromBuilder(MapperMergeContext mapperMergeContext, Builder semanticIncoming) {
-            try {
-                var childContext = mapperMergeContext.createChildContext(semanticIncoming.leafName(), ObjectMapper.Dynamic.FALSE);
-                var existingObjBuilder = getInferenceFieldBuilder(childContext.getMapperBuilderContext());
-                var incomingObjBuilder = semanticIncoming.getInferenceFieldBuilder(childContext.getMapperBuilderContext());
-                var mergedBuilder = (ObjectMapper.Builder) existingObjBuilder.mergeWith(incomingObjBuilder, childContext);
-                setInferenceFieldBuilder(mergedBuilder);
-            } catch (Exception e) {
-                String errorMessage = e.getMessage() != null
-                    ? e.getMessage().replaceAll(SemanticTextField.getEmbeddingsFieldName(""), "")
-                    : "";
-                throw new IllegalArgumentException(errorMessage, e);
-            }
-        }
-
-        @Override
         protected NestedObjectMapper.Builder createChunksField(@Nullable MinimalServiceSettings resolvedModelSettings) {
             NestedObjectMapper.Builder chunksField = new NestedObjectMapper.Builder(
                 SemanticTextField.CHUNKS_FIELD,
@@ -450,12 +372,7 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
                         experimentalFeaturesEnabled,
                         vectorsFormatProviders
                     );
-                    configureDenseVectorMapperBuilder(
-                        indexVersionCreated,
-                        denseVectorMapperBuilder,
-                        modelSettings,
-                        indexOptions.get()
-                    );
+                    configureDenseVectorMapperBuilder(indexVersionCreated, denseVectorMapperBuilder, modelSettings, indexOptions.get());
                     yield denseVectorMapperBuilder;
                 }
                 default -> throw new IllegalArgumentException(
