@@ -500,7 +500,7 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
     }
 
     @Override
-    public FieldMapper.Builder getMergeBuilder() {
+    public SemanticFieldMapper.Builder getMergeBuilder() {
         return new Builder(this);
     }
 

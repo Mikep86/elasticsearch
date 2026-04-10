@@ -539,7 +539,7 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
     }
 
     @Override
-    public FieldMapper.Builder getMergeBuilder() {
+    public SemanticTextFieldMapper.Builder getMergeBuilder() {
         return new Builder(this);
     }
 
@@ -697,7 +697,7 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
     }
 
     private SemanticTextFieldMapper addDynamicUpdate(DocumentParserContext context, SemanticTextField field) {
-        Builder builder = (Builder) getMergeBuilder();
+        Builder builder = getMergeBuilder();
         context.path().remove();
         try {
             builder.setModelSettings(field.inference().modelSettings()).setInferenceId(field.inference().inferenceId());
