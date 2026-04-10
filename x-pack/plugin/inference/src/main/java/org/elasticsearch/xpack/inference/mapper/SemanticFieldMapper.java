@@ -417,7 +417,7 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
 
             final String fullName = context.buildFullName(leafName());
             if (context.isInNestedContext()) {
-                throw new IllegalArgumentException(CONTENT_TYPE + " field [" + fullName + "] cannot be nested");
+                throw new IllegalArgumentException(contentType() + " field [" + fullName + "] cannot be nested");
             }
             var childContext = context.createChildContext(leafName(), ObjectMapper.Dynamic.FALSE);
             final ObjectMapper inferenceField = inferenceFieldBuilder != null
