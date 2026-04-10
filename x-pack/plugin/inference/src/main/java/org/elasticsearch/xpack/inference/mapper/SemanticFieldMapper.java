@@ -11,10 +11,13 @@ import org.apache.lucene.index.FieldInfos;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.join.BitSetProducer;
 import org.apache.lucene.search.join.ScoreMode;
+import org.elasticsearch.ResourceNotFoundException;
 import org.elasticsearch.cluster.metadata.InferenceFieldMetadata;
+import org.elasticsearch.common.Explicit;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.lucene.search.Queries;
 import org.elasticsearch.common.xcontent.support.XContentMapValues;
+import org.elasticsearch.core.Nullable;
 import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.IndexVersion;
 import org.elasticsearch.index.fielddata.FieldDataContext;
@@ -25,16 +28,22 @@ import org.elasticsearch.index.mapper.FieldMapper;
 import org.elasticsearch.index.mapper.IndexType;
 import org.elasticsearch.index.mapper.InferenceFieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
+import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperBuilderContext;
+import org.elasticsearch.index.mapper.MapperService;
 import org.elasticsearch.index.mapper.NestedObjectMapper;
 import org.elasticsearch.index.mapper.ObjectMapper;
 import org.elasticsearch.index.mapper.SimpleMappedFieldType;
 import org.elasticsearch.index.mapper.ValueFetcher;
+import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import org.elasticsearch.index.mapper.vectors.VectorsFormatProvider;
 import org.elasticsearch.index.query.NestedQueryBuilder;
 import org.elasticsearch.index.query.SearchExecutionContext;
 import org.elasticsearch.inference.ChunkingSettings;
 import org.elasticsearch.inference.MinimalServiceSettings;
+import org.elasticsearch.inference.TaskType;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xpack.inference.registry.ModelRegistry;
 
@@ -46,6 +55,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.Function;
 
+import static org.elasticsearch.inference.TaskType.EMBEDDING;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.CHUNKED_EMBEDDINGS_FIELD;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.CHUNKED_OFFSET_FIELD;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.CHUNKING_SETTINGS_FIELD;
@@ -58,12 +68,15 @@ import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.getChun
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.getEmbeddingsFieldName;
 
 public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMapper {
+    private static final Logger logger = LogManager.getLogger(SemanticFieldMapper.class);
+
     public static final String CONTENT_TYPE = "semantic";
     public static final float DEFAULT_RESCORE_OVERSAMPLE = 3.0f;
 
     static final String INDEX_OPTIONS_FIELD = "index_options";
 
     public static class Builder extends FieldMapper.Builder {
+        protected final Function<Query, BitSetProducer> bitSetProducer;
         protected final ModelRegistry modelRegistry;
         protected final IndexSettings indexSettings;
         protected final IndexVersion indexVersionCreated;
@@ -77,6 +90,8 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
         protected final Parameter<ChunkingSettings> chunkingSettings;
         protected final Parameter<Map<String, String>> meta;
 
+        private ObjectMapper.Builder inferenceFieldBuilder = null;
+
         public Builder(
             String name,
             Function<Query, BitSetProducer> bitSetProducer,
@@ -85,6 +100,7 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
             List<VectorsFormatProvider> vectorsFormatProviders
         ) {
             super(name);
+            this.bitSetProducer = bitSetProducer;
             this.modelRegistry = modelRegistry;
             this.indexSettings = indexSettings;
             this.indexVersionCreated = indexSettings.getIndexVersionCreated();
@@ -203,6 +219,90 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
             return Parameter.metaParam();
         }
 
+        protected ObjectMapper.Builder getInferenceFieldBuilder(MapperBuilderContext context) {
+            var resolvedModelSettings = getResolvedModelSettings(context.getMergeReason(), false);
+            return new ObjectMapper.Builder(INFERENCE_FIELD, Explicit.of(ObjectMapper.Subobjects.ENABLED)).dynamic(
+                ObjectMapper.Dynamic.FALSE
+            ).add(createChunksField(resolvedModelSettings));
+        }
+
+        /**
+         * Returns the {@link MinimalServiceSettings} defined in this builder if set;
+         * otherwise, resolves and returns the settings from the registry.
+         */
+        protected MinimalServiceSettings getResolvedModelSettings(@Nullable MapperService.MergeReason mergeReason, boolean logWarning) {
+            if (modelSettings.get() != null) {
+                return modelSettings.get();
+            }
+
+            if (Objects.equals(mergeReason, MapperService.MergeReason.MAPPING_RECOVERY)) {
+                // the model registry is not available yet
+                return null;
+            }
+
+            try {
+                /*
+                 * If the model is not already set and we are not in a recovery scenario, resolve it using the registry.
+                 * Note: We do not set the model in the mapping at this stage. Instead, the model will be added through
+                 * a mapping update during the first ingestion.
+                 * This approach allows mappings to reference inference endpoints that may not yet exist.
+                 * The only requirement is that the referenced inference endpoint must be available at the time of ingestion.
+                 */
+                return modelRegistry.getMinimalServiceSettings(inferenceId.get());
+            } catch (ResourceNotFoundException exc) {
+                if (logWarning) {
+                    /* We allow the inference ID to be unregistered at this point.
+                     * This will delay the creation of sub-fields, so indexing and querying for this field won't work
+                     * until the corresponding inference endpoint is created.
+                     */
+                    logger().warn(
+                        "The field [{}] references an unknown inference ID [{}]. "
+                            + "Indexing and querying this field will not work correctly until the corresponding "
+                            + "inference endpoint is created.",
+                        leafName(),
+                        inferenceId.get()
+                    );
+                }
+                return null;
+            }
+        }
+
+        protected NestedObjectMapper.Builder createChunksField(@Nullable MinimalServiceSettings resolvedModelSettings) {
+            NestedObjectMapper.Builder chunksField = new NestedObjectMapper.Builder(
+                CHUNKS_FIELD,
+                indexVersionCreated,
+                bitSetProducer,
+                indexSettings
+            );
+            chunksField.dynamic(ObjectMapper.Dynamic.FALSE);
+            if (resolvedModelSettings != null) {
+                chunksField.add(createEmbeddingsField(resolvedModelSettings));
+            }
+            chunksField.add(new OffsetSourceFieldMapper.Builder(CHUNKED_OFFSET_FIELD));
+            return chunksField;
+        }
+
+        protected Mapper.Builder createEmbeddingsField(MinimalServiceSettings modelSettings) {
+            if (modelSettings.taskType() != TaskType.EMBEDDING) {
+                throw new IllegalArgumentException("Invalid task_type in model_settings [" + modelSettings.taskType() + "]");
+            }
+
+            DenseVectorFieldMapper.Builder denseVectorMapperBuilder = new DenseVectorFieldMapper.Builder(
+                CHUNKED_EMBEDDINGS_FIELD,
+                indexVersionCreated,
+                false,
+                experimentalFeaturesEnabled,
+                vectorsFormatProviders
+            );
+            // TODO: Configure dense vector mapper
+
+            return denseVectorMapperBuilder;
+        }
+
+        protected void setInferenceFieldBuilder(ObjectMapper.Builder inferenceFieldBuilder) {
+            this.inferenceFieldBuilder = inferenceFieldBuilder;
+        }
+
         @Override
         protected Parameter<?>[] getParameters() {
             return new Parameter<?>[] { inferenceId, searchInferenceId, modelSettings, chunkingSettings, indexOptions, meta };
@@ -214,8 +314,63 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
         }
 
         @Override
-        public FieldMapper build(MapperBuilderContext context) {
-            return null;
+        public SemanticFieldMapper build(MapperBuilderContext context) {
+            var resolvedModelSettings = getResolvedModelSettings(context.getMergeReason(), true);
+            if (resolvedModelSettings != null) {
+                validateTaskType(resolvedModelSettings);
+            }
+
+            // If index_options are specified by the user, we will validate them against the model settings to ensure compatibility.
+            // We do not serialize or otherwise store model settings at this time, this happens when the underlying vector field is created.
+            if (context.getMergeReason() != MapperService.MergeReason.MAPPING_RECOVERY) {
+                validateIndexOptions(resolvedModelSettings);
+            }
+
+            final String fullName = context.buildFullName(leafName());
+            if (context.isInNestedContext()) {
+                throw new IllegalArgumentException(CONTENT_TYPE + " field [" + fullName + "] cannot be nested");
+            }
+            var childContext = context.createChildContext(leafName(), ObjectMapper.Dynamic.FALSE);
+            final ObjectMapper inferenceField = inferenceFieldBuilder != null
+                ? inferenceFieldBuilder.build(childContext)
+                : getInferenceFieldBuilder(childContext).build(childContext);
+
+            return buildMapper(fullName, inferenceField, builderParams(this, context));
+        }
+
+        protected void validateTaskType(MinimalServiceSettings modelSettings) {
+            if (modelSettings.taskType() != EMBEDDING) {
+                throw new IllegalArgumentException(
+                    "Wrong [" + MinimalServiceSettings.TASK_TYPE_FIELD + "], expected " + EMBEDDING + ", got " + modelSettings.taskType()
+                );
+            }
+        }
+
+        protected void validateIndexOptions(MinimalServiceSettings modelSettings) {
+            // TODO: Implement
+        }
+
+        protected SemanticFieldMapper buildMapper(String fullName, ObjectMapper inferenceField, BuilderParams builderParams) {
+            return new SemanticFieldMapper(
+                leafName(),
+                new SemanticFieldType(
+                    fullName,
+                    inferenceId.getValue(),
+                    searchInferenceId.getValue(),
+                    modelSettings.getValue(),
+                    chunkingSettings.getValue(),
+                    indexOptions.getValue(),
+                    inferenceField,
+                    meta.getValue()
+                ),
+                builderParams,
+                modelRegistry,
+                vectorsFormatProviders
+            );
+        }
+
+        protected Logger logger() {
+            return SemanticFieldMapper.logger;
         }
     }
 
