@@ -47,7 +47,6 @@ import org.elasticsearch.index.mapper.SourceValueFetcher;
 import org.elasticsearch.index.mapper.TextFieldMapper;
 import org.elasticsearch.index.mapper.ValueFetcher;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
-import org.elasticsearch.index.mapper.vectors.IndexOptions;
 import org.elasticsearch.index.mapper.vectors.SparseVectorFieldMapper;
 import org.elasticsearch.index.mapper.vectors.VectorsFormatProvider;
 import org.elasticsearch.index.query.MatchNoneQueryBuilder;
@@ -289,16 +288,9 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
                             MinimalServiceSettings resolvedModelSettings = getResolvedModelSettings(null, false);
                             value = defaultIndexOptions(indexVersionCreated, resolvedModelSettings);
                         } else if (value.type() == SemanticTextIndexOptions.SupportedIndexOptions.DENSE_VECTOR) {
-                            DenseVectorFieldMapper.ElementType elementTypeOverride;
-                            DenseVectorFieldMapper.DenseVectorIndexOptions dvio;
-                            if (value.indexOptions() instanceof ExtendedDenseVectorIndexOptions edvio) {
-                                elementTypeOverride = edvio.getElementType();
-                                dvio = edvio.getBaseIndexOptions();
-                            } else {
-                                throw new IllegalStateException(
-                                    "Unexpected inner index options type [" + value.indexOptions().getClass().getSimpleName() + "]"
-                                );
-                            }
+                            ExtendedDenseVectorIndexOptions innerIndexOptions = getExtendedDenseVectorIndexOptions(value);
+                            DenseVectorFieldMapper.ElementType elementTypeOverride = innerIndexOptions.getElementType();
+                            DenseVectorFieldMapper.DenseVectorIndexOptions dvio = innerIndexOptions.getBaseIndexOptions();
 
                             MinimalServiceSettings resolvedModelSettings = getResolvedModelSettings(null, false);
                             if (resolvedModelSettings == null) {
@@ -442,21 +434,13 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
                 }
 
                 DenseVectorFieldMapper.ElementType elementType = modelSettings.elementType();
-                DenseVectorFieldMapper.DenseVectorIndexOptions denseVectorIndexOptions;
-                IndexOptions innerIndexOptions = indexOptions.indexOptions();
-                if (innerIndexOptions instanceof ExtendedDenseVectorIndexOptions edvio) {
-                    denseVectorIndexOptions = edvio.getBaseIndexOptions();
-
-                    if (edvio.getElementType() != null) {
-                        validateElementTypeOverride(elementType, edvio.getElementType());
-                        elementType = edvio.getElementType();
-                    }
-                } else {
-                    throw new IllegalStateException(
-                        "Unexpected inner index options type [" + innerIndexOptions.getClass().getSimpleName() + "]"
-                    );
+                ExtendedDenseVectorIndexOptions innerIndexOptions = getExtendedDenseVectorIndexOptions(indexOptions);
+                if (innerIndexOptions.getElementType() != null) {
+                    validateElementTypeOverride(elementType, innerIndexOptions.getElementType());
+                    elementType = innerIndexOptions.getElementType();
                 }
 
+                DenseVectorFieldMapper.DenseVectorIndexOptions denseVectorIndexOptions = innerIndexOptions.getBaseIndexOptions();
                 if (denseVectorIndexOptions != null) {
                     int dims = modelSettings.dimensions() != null ? modelSettings.dimensions() : 0;
                     denseVectorIndexOptions.validate(elementType, dims, true);
@@ -1100,17 +1084,10 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
             modelSettings.elementType()
         ) ? DenseVectorFieldMapper.ElementType.BFLOAT16 : modelSettings.elementType();
         if (indexOptions != null) {
-            DenseVectorFieldMapper.DenseVectorIndexOptions denseVectorIndexOptions;
-            IndexOptions innerIndexOptions = indexOptions.indexOptions();
-            if (innerIndexOptions instanceof ExtendedDenseVectorIndexOptions edvio) {
-                denseVectorIndexOptions = edvio.getBaseIndexOptions();
-                if (edvio.getElementType() != null) {
-                    resolvedElementType = edvio.getElementType();
-                }
-            } else {
-                throw new IllegalStateException(
-                    "Unexpected inner index options type [" + innerIndexOptions.getClass().getSimpleName() + "]"
-                );
+            ExtendedDenseVectorIndexOptions innerIndexOptions = getExtendedDenseVectorIndexOptions(indexOptions);
+            DenseVectorFieldMapper.DenseVectorIndexOptions denseVectorIndexOptions = innerIndexOptions.getBaseIndexOptions();
+            if (innerIndexOptions.getElementType() != null) {
+                resolvedElementType = innerIndexOptions.getElementType();
             }
 
             if (denseVectorIndexOptions == null) {
