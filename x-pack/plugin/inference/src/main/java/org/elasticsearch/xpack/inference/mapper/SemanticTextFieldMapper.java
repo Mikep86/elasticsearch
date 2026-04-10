@@ -17,7 +17,6 @@ import org.apache.lucene.search.Weight;
 import org.apache.lucene.search.join.BitSetProducer;
 import org.apache.lucene.search.join.ScoreMode;
 import org.apache.lucene.util.BitSet;
-import org.elasticsearch.cluster.metadata.InferenceFieldMetadata;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.settings.Setting;
@@ -40,7 +39,6 @@ import org.elasticsearch.index.mapper.KeywordFieldMapper;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperBuilderContext;
-import org.elasticsearch.index.mapper.MappingLookup;
 import org.elasticsearch.index.mapper.MappingParserContext;
 import org.elasticsearch.index.mapper.NestedObjectMapper;
 import org.elasticsearch.index.mapper.ObjectMapper;
@@ -81,14 +79,11 @@ import org.elasticsearch.xpack.inference.registry.ModelRegistry;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -154,6 +149,8 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
     public static final String DEFAULT_FALLBACK_ELSER_INFERENCE_ID = DEFAULT_ELSER_ID;
     public static final String DEFAULT_EIS_ELSER_INFERENCE_ID = DEFAULT_ELSER_ENDPOINT_ID_V2;
     public static final String DEFAULT_EIS_JINA_V5_INFERENCE_ID = DEFAULT_JINA_V5_ENDPOINT_ID;
+
+    public static final float DEFAULT_RESCORE_OVERSAMPLE = 3.0f;
 
     /**
      * An index setting that allows users to pin the default inference ID for {@code semantic_text} fields that do not declare an explicit
@@ -224,7 +221,7 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
 
     public static BiConsumer<String, MappingParserContext> validateParserContext(String type) {
         return (n, c) -> {
-            if (InferenceMetadataFieldsMapper.isEnabled(c.getIndexSettings().getSettings()) == false) {
+            if (useLegacyFormat(c.getIndexSettings())) {
                 notInMultiFields(type).accept(n, c);
             }
             notFromDynamicTemplates(type).accept(n, c);
@@ -511,10 +508,6 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
                 );
             }
         }
-
-        private static boolean useLegacyFormat(IndexSettings indexSettings) {
-            return InferenceMetadataFieldsMapper.isEnabled(indexSettings.getSettings()) == false;
-        }
     }
 
     private SemanticTextFieldMapper(
@@ -528,19 +521,18 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
     }
 
     @Override
-    public Iterator<Mapper> iterator() {
-        List<Mapper> mappers = new ArrayList<>();
-        Iterator<Mapper> m = super.iterator();
-        while (m.hasNext()) {
-            mappers.add(m.next());
-        }
-        mappers.add(fieldType().getInferenceField());
-        return mappers.iterator();
+    public SemanticTextFieldMapper.Builder getMergeBuilder() {
+        return new Builder(this);
     }
 
     @Override
-    public SemanticTextFieldMapper.Builder getMergeBuilder() {
-        return new Builder(this);
+    protected String contentType() {
+        return CONTENT_TYPE;
+    }
+
+    @Override
+    public SemanticTextFieldType fieldType() {
+        return (SemanticTextFieldType) super.fieldType();
     }
 
     @Override
@@ -718,49 +710,6 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
             }
         } finally {
             context.path().add(leafName());
-        }
-    }
-
-    @Override
-    protected String contentType() {
-        return CONTENT_TYPE;
-    }
-
-    @Override
-    public SemanticTextFieldType fieldType() {
-        return (SemanticTextFieldType) super.fieldType();
-    }
-
-    @Override
-    public InferenceFieldMetadata getMetadata(Set<String> sourcePaths) {
-        String[] copyFields = sourcePaths.toArray(String[]::new);
-        // ensure consistent order
-        Arrays.sort(copyFields);
-        ChunkingSettings fieldTypeChunkingSettings = fieldType().getChunkingSettings();
-        Map<String, Object> asMap = fieldTypeChunkingSettings != null ? fieldTypeChunkingSettings.asMap() : null;
-
-        return new InferenceFieldMetadata(fullPath(), fieldType().getInferenceId(), fieldType().getSearchInferenceId(), copyFields, asMap);
-    }
-
-    @Override
-    protected void doValidate(MappingLookup mappers) {
-        String fullPath = mappers.isMultiField(fullPath()) ? mappers.parentField(fullPath()) : fullPath();
-        String leafName = mappers.getMapper(fullPath).leafName();
-        int parentPathIndex = fullPath.lastIndexOf(leafName);
-        if (parentPathIndex > 0) {
-            String parentName = fullPath.substring(0, parentPathIndex - 1);
-            // Check that the parent object field allows subobjects.
-            // Subtract one from the parent path index to omit the trailing dot delimiter.
-            ObjectMapper parentMapper = mappers.objectMappers().get(parentName);
-            if (parentMapper == null) {
-                throw new IllegalStateException(CONTENT_TYPE + " field [" + fullPath() + "] does not have a parent object mapper");
-            }
-
-            if (parentMapper.subobjects() == ObjectMapper.Subobjects.DISABLED) {
-                throw new IllegalArgumentException(
-                    CONTENT_TYPE + " field [" + fullPath() + "] cannot be in an object field with subobjects disabled"
-                );
-            }
         }
     }
 
@@ -1274,5 +1223,9 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
         }
 
         return null;
+    }
+
+    private static boolean useLegacyFormat(IndexSettings indexSettings) {
+        return InferenceMetadataFieldsMapper.isEnabled(indexSettings.getSettings()) == false;
     }
 }

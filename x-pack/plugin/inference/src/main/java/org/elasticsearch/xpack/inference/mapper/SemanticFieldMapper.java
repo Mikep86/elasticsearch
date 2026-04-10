@@ -32,6 +32,7 @@ import org.elasticsearch.index.mapper.Mapper;
 import org.elasticsearch.index.mapper.MapperBuilderContext;
 import org.elasticsearch.index.mapper.MapperMergeContext;
 import org.elasticsearch.index.mapper.MapperService;
+import org.elasticsearch.index.mapper.MappingLookup;
 import org.elasticsearch.index.mapper.NestedObjectMapper;
 import org.elasticsearch.index.mapper.ObjectMapper;
 import org.elasticsearch.index.mapper.SimpleMappedFieldType;
@@ -49,6 +50,8 @@ import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xpack.inference.registry.ModelRegistry;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
@@ -72,7 +75,6 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
     private static final Logger logger = LogManager.getLogger(SemanticFieldMapper.class);
 
     public static final String CONTENT_TYPE = "semantic";
-    public static final float DEFAULT_RESCORE_OVERSAMPLE = 3.0f;
 
     static final String INDEX_OPTIONS_FIELD = "index_options";
 
@@ -206,10 +208,8 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
                 (n, c, o) -> parseIndexOptionsFromMap(n, o, c.indexVersionCreated(), experimentalFeaturesEnabled),
                 mapper -> ((SemanticFieldType) mapper.fieldType()).indexOptions,
                 (b, n, v) -> {
-                    // TODO: Fix
-                    if (v != null) {
-                        b.field(INDEX_OPTIONS_FIELD, v);
-                    }
+                    // TODO: Implement
+                    throw new UnsupportedOperationException("Unimplemented");
                 },
                 Objects::toString
             ).acceptsNull();
@@ -437,6 +437,7 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
 
         protected void validateIndexOptions(MinimalServiceSettings modelSettings) {
             // TODO: Implement
+            throw new UnsupportedOperationException("Unimplemented");
         }
 
         protected SemanticFieldMapper buildMapper(String fullName, ObjectMapper inferenceField, BuilderParams builderParams) {
@@ -495,8 +496,14 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
     }
 
     @Override
-    protected void parseCreateField(DocumentParserContext context) throws IOException {
-        // TODO: Implement
+    public Iterator<Mapper> iterator() {
+        List<Mapper> mappers = new ArrayList<>();
+        Iterator<Mapper> m = super.iterator();
+        while (m.hasNext()) {
+            mappers.add(m.next());
+        }
+        mappers.add(fieldType().getInferenceField());
+        return mappers.iterator();
     }
 
     @Override
@@ -516,8 +523,41 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
 
     @Override
     public InferenceFieldMetadata getMetadata(Set<String> sourcePaths) {
+        String[] copyFields = sourcePaths.toArray(String[]::new);
+        // ensure consistent order
+        Arrays.sort(copyFields);
+        ChunkingSettings fieldTypeChunkingSettings = fieldType().getChunkingSettings();
+        Map<String, Object> asMap = fieldTypeChunkingSettings != null ? fieldTypeChunkingSettings.asMap() : null;
+
+        return new InferenceFieldMetadata(fullPath(), fieldType().getInferenceId(), fieldType().getSearchInferenceId(), copyFields, asMap);
+    }
+
+    @Override
+    protected void doValidate(MappingLookup mappers) {
+        String fullPath = mappers.isMultiField(fullPath()) ? mappers.parentField(fullPath()) : fullPath();
+        String leafName = mappers.getMapper(fullPath).leafName();
+        int parentPathIndex = fullPath.lastIndexOf(leafName);
+        if (parentPathIndex > 0) {
+            String parentName = fullPath.substring(0, parentPathIndex - 1);
+            // Check that the parent object field allows subobjects.
+            // Subtract one from the parent path index to omit the trailing dot delimiter.
+            ObjectMapper parentMapper = mappers.objectMappers().get(parentName);
+            if (parentMapper == null) {
+                throw new IllegalStateException(contentType() + " field [" + fullPath() + "] does not have a parent object mapper");
+            }
+
+            if (parentMapper.subobjects() == ObjectMapper.Subobjects.DISABLED) {
+                throw new IllegalArgumentException(
+                    contentType() + " field [" + fullPath() + "] cannot be in an object field with subobjects disabled"
+                );
+            }
+        }
+    }
+
+    @Override
+    protected void parseCreateField(DocumentParserContext context) throws IOException {
         // TODO: Implement
-        return null;
+        throw new UnsupportedOperationException("Unimplemented");
     }
 
     public static class SemanticFieldType extends SimpleMappedFieldType {
@@ -622,13 +662,13 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
         @Override
         public ValueFetcher valueFetcher(SearchExecutionContext context, String format) {
             // TODO: Implement
-            return null;
+            throw new UnsupportedOperationException("Unimplemented");
         }
 
         @Override
         public BlockLoader blockLoader(BlockLoaderContext blContext) {
             // TODO: Implement
-            return null;
+            throw new UnsupportedOperationException("Unimplemented");
         }
     }
 
