@@ -116,6 +116,17 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
             this.meta = configureMetaParam();
         }
 
+        public Builder(SemanticFieldMapper mapper) {
+            this(
+                mapper.leafName(),
+                mapper.fieldType().getChunksField().bitsetProducer(),
+                mapper.fieldType().getChunksField().indexSettings(),
+                mapper.modelRegistry,
+                mapper.vectorsFormatProviders
+            );
+            init(mapper);
+        }
+
         public Builder setInferenceId(String id) {
             this.inferenceId.setValue(id);
             return this;
@@ -490,13 +501,17 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
 
     @Override
     public FieldMapper.Builder getMergeBuilder() {
-        // TODO: Implement
-        return null;
+        return new Builder(this);
     }
 
     @Override
     protected String contentType() {
         return CONTENT_TYPE;
+    }
+
+    @Override
+    public SemanticFieldType fieldType() {
+        return (SemanticFieldType) super.fieldType();
     }
 
     @Override

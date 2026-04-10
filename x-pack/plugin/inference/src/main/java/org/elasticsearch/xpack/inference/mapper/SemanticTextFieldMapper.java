@@ -234,18 +234,6 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
     public static class Builder extends SemanticFieldMapper.Builder {
         private final boolean useLegacyFormat;
 
-        public static Builder from(SemanticTextFieldMapper mapper) {
-            Builder builder = new Builder(
-                mapper.leafName(),
-                mapper.fieldType().getChunksField().bitsetProducer(),
-                mapper.fieldType().getChunksField().indexSettings(),
-                mapper.modelRegistry,
-                mapper.vectorsFormatProviders
-            );
-            builder.init(mapper);
-            return builder;
-        }
-
         public Builder(
             String name,
             Function<Query, BitSetProducer> bitSetProducer,
@@ -254,7 +242,12 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
             List<VectorsFormatProvider> vectorsFormatProviders
         ) {
             super(name, bitSetProducer, indexSettings, modelRegistry, vectorsFormatProviders);
-            this.useLegacyFormat = InferenceMetadataFieldsMapper.isEnabled(indexSettings.getSettings()) == false;
+            this.useLegacyFormat = useLegacyFormat(indexSettings);
+        }
+
+        public Builder(SemanticTextFieldMapper mapper) {
+            super(mapper);
+            this.useLegacyFormat = useLegacyFormat(indexSettings);
         }
 
         @Override
@@ -495,6 +488,11 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
             );
         }
 
+        @Override
+        protected Logger logger() {
+            return SemanticTextFieldMapper.logger;
+        }
+
         private static void validateElementTypeOverride(
             DenseVectorFieldMapper.ElementType modelElementType,
             DenseVectorFieldMapper.ElementType overrideElementType
@@ -514,9 +512,8 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
             }
         }
 
-        @Override
-        protected Logger logger() {
-            return SemanticTextFieldMapper.logger;
+        private static boolean useLegacyFormat(IndexSettings indexSettings) {
+            return InferenceMetadataFieldsMapper.isEnabled(indexSettings.getSettings()) == false;
         }
     }
 
@@ -543,7 +540,7 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
 
     @Override
     public FieldMapper.Builder getMergeBuilder() {
-        return Builder.from(this);
+        return new Builder(this);
     }
 
     @Override
