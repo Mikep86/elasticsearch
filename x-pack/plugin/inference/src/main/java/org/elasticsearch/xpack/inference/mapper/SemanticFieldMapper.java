@@ -23,6 +23,7 @@ import org.elasticsearch.index.IndexVersion;
 import org.elasticsearch.index.fielddata.FieldDataContext;
 import org.elasticsearch.index.fielddata.IndexFieldData;
 import org.elasticsearch.index.mapper.BlockLoader;
+import org.elasticsearch.index.mapper.BlockSourceReader;
 import org.elasticsearch.index.mapper.DocumentParserContext;
 import org.elasticsearch.index.mapper.FieldMapper;
 import org.elasticsearch.index.mapper.IndexType;
@@ -733,12 +734,21 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
 
         @Override
         public BlockLoader blockLoader(BlockLoaderContext blContext) {
-            // TODO: Implement
-            throw new UnsupportedOperationException("Unimplemented");
+            return new BlockSourceReader.BytesRefsBlockLoader(allValuesFetcher(blContext), BlockSourceReader.lookupMatchingAll());
         }
 
+        /**
+         * Get a {@link ValueFetcher} for the original value(s) directly written to this field.
+         */
         protected ValueFetcher originalValueFetcher(SearchExecutionContext context) {
             return SourceValueFetcher.toString(name(), context, null);
+        }
+
+        /**
+         * Get a {@link ValueFetcher} for all values written to this field, both directly and via {@code copy_to}.
+         */
+        protected ValueFetcher allValuesFetcher(MappedFieldType.BlockLoaderContext blContext) {
+            return SourceValueFetcher.toString(blContext.sourcePaths(name()), blContext.indexSettings());
         }
     }
 

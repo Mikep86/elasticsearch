@@ -20,8 +20,6 @@ import org.elasticsearch.features.NodeFeature;
 import org.elasticsearch.index.IndexSettings;
 import org.elasticsearch.index.IndexVersion;
 import org.elasticsearch.index.IndexVersions;
-import org.elasticsearch.index.mapper.BlockLoader;
-import org.elasticsearch.index.mapper.BlockSourceReader;
 import org.elasticsearch.index.mapper.DocumentParserContext;
 import org.elasticsearch.index.mapper.DocumentParsingException;
 import org.elasticsearch.index.mapper.FieldMapper;
@@ -723,6 +721,15 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
                 : super.originalValueFetcher(context);
         }
 
+        @Override
+        protected ValueFetcher allValuesFetcher(BlockLoaderContext blContext) {
+            if (useLegacyFormat) {
+                return SourceValueFetcher.toString(blContext.sourcePaths(getOriginalTextFieldName(name())), blContext.indexSettings());
+            }
+
+            return super.allValuesFetcher(blContext);
+        }
+
         public QueryBuilder semanticQuery(InferenceResults inferenceResults, Integer requestSize, float boost, String queryName) {
             String nestedFieldPath = getChunksFieldName(name());
             String inferenceResultsFieldName = getEmbeddingsFieldName(name());
@@ -833,13 +840,6 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
             }
 
             return baseMessageBuilder.toString();
-        }
-
-        @Override
-        public BlockLoader blockLoader(MappedFieldType.BlockLoaderContext blContext) {
-            String name = useLegacyFormat ? name().concat(".text") : name();
-            SourceValueFetcher fetcher = SourceValueFetcher.toString(blContext.sourcePaths(name), blContext.indexSettings());
-            return new BlockSourceReader.BytesRefsBlockLoader(fetcher, BlockSourceReader.lookupMatchingAll());
         }
     }
 
