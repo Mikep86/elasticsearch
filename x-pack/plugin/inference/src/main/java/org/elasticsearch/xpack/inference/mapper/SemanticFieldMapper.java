@@ -36,6 +36,7 @@ import org.elasticsearch.index.mapper.MappingLookup;
 import org.elasticsearch.index.mapper.NestedObjectMapper;
 import org.elasticsearch.index.mapper.ObjectMapper;
 import org.elasticsearch.index.mapper.SimpleMappedFieldType;
+import org.elasticsearch.index.mapper.SourceValueFetcher;
 import org.elasticsearch.index.mapper.ValueFetcher;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import org.elasticsearch.index.mapper.vectors.IndexOptions;
@@ -713,14 +714,31 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
 
         @Override
         public ValueFetcher valueFetcher(SearchExecutionContext context, String format) {
-            // TODO: Implement
-            throw new UnsupportedOperationException("Unimplemented");
+            if (format != null && "chunks".equals(format) == false) {
+                throw new IllegalArgumentException(
+                    "Unknown format [" + format + "] for field [" + name() + "], only [chunks] is supported."
+                );
+            }
+            if (format != null) {
+                return new SemanticFieldValueFetcher(
+                    this,
+                    getChunksField().bitsetProducer(),
+                    context.searcher(),
+                    SemanticFieldValueFetcher.Mode.TEXT
+                );
+            }
+
+            return originalValueFetcher(context);
         }
 
         @Override
         public BlockLoader blockLoader(BlockLoaderContext blContext) {
             // TODO: Implement
             throw new UnsupportedOperationException("Unimplemented");
+        }
+
+        protected ValueFetcher originalValueFetcher(SearchExecutionContext context) {
+            return SourceValueFetcher.toString(name(), context, null);
         }
     }
 

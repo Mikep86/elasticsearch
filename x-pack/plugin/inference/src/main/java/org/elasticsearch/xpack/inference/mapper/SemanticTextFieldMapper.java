@@ -717,25 +717,10 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
         }
 
         @Override
-        public ValueFetcher valueFetcher(SearchExecutionContext context, String format) {
-            if (format != null && "chunks".equals(format) == false) {
-                throw new IllegalArgumentException(
-                    "Unknown format [" + format + "] for field [" + name() + "], only [chunks] is supported."
-                );
-            }
-            if (format != null) {
-                return new SemanticFieldValueFetcher(
-                    this,
-                    getChunksField().bitsetProducer(),
-                    context.searcher(),
-                    SemanticFieldValueFetcher.Mode.TEXT
-                );
-            }
-            if (useLegacyFormat) {
-                // Redirect the fetcher to load the original values of the field
-                return SourceValueFetcher.toString(getOriginalTextFieldName(name()), context, null);
-            }
-            return SourceValueFetcher.toString(name(), context, null);
+        protected ValueFetcher originalValueFetcher(SearchExecutionContext context) {
+            return useLegacyFormat
+                ? SourceValueFetcher.toString(getOriginalTextFieldName(name()), context, null)
+                : super.originalValueFetcher(context);
         }
 
         public QueryBuilder semanticQuery(InferenceResults inferenceResults, Integer requestSize, float boost, String queryName) {
