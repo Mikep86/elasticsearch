@@ -13,6 +13,7 @@ import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ScoreMode;
 import org.apache.lucene.search.Scorer;
+import org.apache.lucene.search.Weight;
 import org.apache.lucene.search.join.BitSetProducer;
 import org.apache.lucene.util.BitSet;
 import org.elasticsearch.common.Strings;
@@ -55,6 +56,7 @@ class SemanticFieldValueFetcher implements ValueFetcher {
     private final IndexSearcher searcher;
     private final Mode mode;
 
+    private Weight childWeight;
     private BitSet bitSet;
     private Scorer childScorer;
     private SourceLoader.SyntheticFieldLoader.DocValuesLoader dvLoader;
@@ -220,6 +222,10 @@ class SemanticFieldValueFetcher implements ValueFetcher {
     }
 
     private Scorer getChildScorer(LeafReaderContext context) throws IOException {
-        return searcher.createWeight(fieldType.getChunksField().nestedTypeFilter(), ScoreMode.COMPLETE_NO_SCORES, 1).scorer(context);
+        if (childWeight == null) {
+            childWeight = searcher.createWeight(fieldType.getChunksField().nestedTypeFilter(), ScoreMode.COMPLETE_NO_SCORES, 1);
+        }
+
+        return childWeight.scorer(context);
     }
 }
