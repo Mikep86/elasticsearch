@@ -313,9 +313,6 @@ tests:
 - class: org.elasticsearch.xpack.esql.qa.single_node.GenerativeApproximationIT
   method: test {csv-spec:inlinestats.filterSometimesMatches}
   issue: https://github.com/elastic/elasticsearch/issues/146545
-- class: org.elasticsearch.versioning.ConcurrentSeqNoVersioningIT
-  method: testSeqNoCASLinearizability
-  issue: https://github.com/elastic/elasticsearch/issues/146568
 - class: org.elasticsearch.xpack.esql.qa.multi_node.GenerativeUnmappedLoadIT
   method: test
   issue: https://github.com/elastic/elasticsearch/issues/145900
@@ -351,9 +348,6 @@ tests:
   issue: https://github.com/elastic/elasticsearch/issues/146690
 - class: org.elasticsearch.transport.TransportHandshakerTests
   method: testHandshakeRequestAndResponse
-  issue: https://github.com/elastic/elasticsearch/issues/146743
-- class: org.elasticsearch.synonyms.SynonymsManagementAPIServiceTests
-  method: testBulkUpdateEmptySet
   issue: https://github.com/elastic/elasticsearch/issues/146743
 - class: org.elasticsearch.xpack.esql.qa.single_node.GenerativeRandomMappingIT
   method: test
@@ -391,9 +385,6 @@ tests:
 - class: org.elasticsearch.xpack.esql.qa.single_node.GenerativeForkIT
   method: test {csv-spec:stats_sparkline.sparklineComplexWithGrouping}
   issue: https://github.com/elastic/elasticsearch/issues/146729
-- class: org.elasticsearch.synonyms.SynonymsManagementAPIServiceTests
-  method: testTransportVersionGateRejectsLargeSetsOnOldCluster
-  issue: https://github.com/elastic/elasticsearch/issues/146743
 - class: org.elasticsearch.transport.ClusterConnectionManagerTests
   method: testConcurrentConnectsDuringClose
   issue: https://github.com/elastic/elasticsearch/issues/146743
@@ -412,18 +403,9 @@ tests:
 - class: org.elasticsearch.reindex.ReindexBasicTests
   method: testCopyManyWithAutoSlicing
   issue: https://github.com/elastic/elasticsearch/issues/146741
-- class: org.elasticsearch.synonyms.SynonymsManagementAPIServiceTests
-  method: testPutSynonymRuleUpgradeGuardRejectsOnOldCluster
-  issue: https://github.com/elastic/elasticsearch/issues/146743
 - class: org.elasticsearch.xpack.searchablesnapshots.SearchableSnapshotReindexRelocationOnShutdownIT
   method: testReindexRelocatesWithSearchableSnapshotSource
   issue: https://github.com/elastic/elasticsearch/issues/146710
-- class: org.elasticsearch.xpack.inference.mapper.SemanticTextFieldMapperTests
-  method: testSparseVectorMappingUpdate {p0=true p1=ENTERPRISE}
-  issue: https://github.com/elastic/elasticsearch/issues/146772
-- class: org.elasticsearch.xpack.inference.mapper.SemanticTextFieldMapperTests
-  method: testSparseVectorMappingUpdate {p0=true p1=BASIC}
-  issue: https://github.com/elastic/elasticsearch/issues/146773
 - class: org.elasticsearch.reindex.ReindexerTests
   issue: https://github.com/elastic/elasticsearch/issues/146047
 - class: org.elasticsearch.xpack.esql.qa.single_node.GenerativeApproximationIT
@@ -462,6 +444,12 @@ tests:
 - class: org.elasticsearch.xpack.esql.qa.multi_node.GenerativeIT
   method: test
   issue: https://github.com/elastic/elasticsearch/issues/145901
+- class: org.elasticsearch.lucene.FullClusterRestartSystemIndexCompatibilityIT
+  method: testAsyncSearchIndexMigration {p0=9.5.0}
+  issue: https://github.com/elastic/elasticsearch/issues/146848
+- class: org.elasticsearch.lucene.FullClusterRestartSystemIndexCompatibilityIT
+  method: testAsyncSearchIndexMigration {p0=8.19.0}
+  issue: https://github.com/elastic/elasticsearch/issues/146849
 
 # Examples:
 #
