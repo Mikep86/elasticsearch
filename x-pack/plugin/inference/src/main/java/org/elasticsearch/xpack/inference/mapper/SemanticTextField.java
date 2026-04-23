@@ -269,9 +269,14 @@ public record SemanticTextField(
             Integer inputIndex = (Integer) args[3];
             BytesReference rawEmbeddings = (BytesReference) args[4];
 
-            if (context.useLegacyFormat() && text == null) {
-                throw new IllegalArgumentException("Missing chunk text");
+            if (context.useLegacyFormat()) {
+                if (text == null) {
+                    throw new IllegalArgumentException("Missing chunk text");
+                }
+
+                return new Chunk(text, rawEmbeddings);
             }
+
             if (inputIndex != null) {
                 if (startOffset != null || endOffset != null) {
                     throw new IllegalArgumentException(
