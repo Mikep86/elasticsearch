@@ -90,9 +90,9 @@ public record SemanticTextField(
         private static final int NO_OFFSET = -1;
 
         public Chunk {
-            // Temporary logic to ensure no callers set inputIndex until support is implemented
+            // Temporary logic to ensure no callers set inputIndex in release builds
             if (inputIndex != null && SemanticFieldMapper.SEMANTIC_FIELD_FEATURE_FLAG.isEnabled() == false) {
-                throw new IllegalStateException("inputIndex is not supported yet");
+                throw new UnsupportedOperationException("Input index is not supported yet");
             }
         }
 
@@ -197,6 +197,8 @@ public record SemanticTextField(
                 builder.startObject();
                 if (useLegacyFormat) {
                     builder.field(TEXT_FIELD, chunk.text);
+                } else if (chunk.inputIndex != null) {
+                    builder.field(CHUNKED_INPUT_INDEX_FIELD, chunk.inputIndex);
                 } else {
                     builder.field(CHUNKED_START_OFFSET_FIELD, chunk.startOffset);
                     builder.field(CHUNKED_END_OFFSET_FIELD, chunk.endOffset);
@@ -261,16 +263,46 @@ public record SemanticTextField(
         true,
         (args, context) -> {
             String text = (String) args[0];
+            Integer startOffset = (Integer) args[1];
+            Integer endOffset = (Integer) args[2];
+            Integer inputIndex = (Integer) args[3];
+            BytesReference rawEmbeddings = (BytesReference) args[4];
+
             if (context.useLegacyFormat() && text == null) {
                 throw new IllegalArgumentException("Missing chunk text");
             }
-            return new Chunk(
-                text,
-                args[1] != null ? (int) args[1] : -1,
-                args[2] != null ? (int) args[2] : -1,
-                null,  // TODO: Set input index
-                (BytesReference) args[3]
-            );
+            if (inputIndex != null) {
+                if (startOffset != null || endOffset != null) {
+                    throw new IllegalArgumentException(
+                        "["
+                            + CHUNKS_FIELD
+                            + "] must not specify both ["
+                            + CHUNKED_INPUT_INDEX_FIELD
+                            + "] and ["
+                            + CHUNKED_START_OFFSET_FIELD
+                            + "]/["
+                            + CHUNKED_END_OFFSET_FIELD
+                            + "]"
+                    );
+                }
+
+                return new Chunk(inputIndex, rawEmbeddings);
+            }
+
+            if (startOffset == null || endOffset == null) {
+                throw new IllegalArgumentException(
+                    "["
+                        + CHUNKS_FIELD
+                        + "] requires either ["
+                        + CHUNKED_INPUT_INDEX_FIELD
+                        + "] or both ["
+                        + CHUNKED_START_OFFSET_FIELD
+                        + "] and ["
+                        + CHUNKED_END_OFFSET_FIELD
+                        + "]"
+                );
+            }
+            return new Chunk(startOffset, endOffset, rawEmbeddings);
         }
     );
 
@@ -301,6 +333,7 @@ public record SemanticTextField(
         CHUNKS_PARSER.declareString(optionalConstructorArg(), new ParseField(TEXT_FIELD));
         CHUNKS_PARSER.declareInt(optionalConstructorArg(), new ParseField(CHUNKED_START_OFFSET_FIELD));
         CHUNKS_PARSER.declareInt(optionalConstructorArg(), new ParseField(CHUNKED_END_OFFSET_FIELD));
+        CHUNKS_PARSER.declareInt(optionalConstructorArg(), new ParseField(CHUNKED_INPUT_INDEX_FIELD));
         CHUNKS_PARSER.declareField(constructorArg(), (p, c) -> {
             XContentBuilder b = XContentBuilder.builder(p.contentType().xContent());
             b.copyCurrentStructure(p);

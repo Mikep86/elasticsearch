@@ -40,7 +40,6 @@ import org.elasticsearch.index.mapper.MapperMergeContext;
 import org.elasticsearch.index.mapper.MapperService;
 import org.elasticsearch.index.mapper.MappingLookup;
 import org.elasticsearch.index.mapper.NestedObjectMapper;
-import org.elasticsearch.index.mapper.NumberFieldMapper;
 import org.elasticsearch.index.mapper.ObjectMapper;
 import org.elasticsearch.index.mapper.SimpleMappedFieldType;
 import org.elasticsearch.index.mapper.SourceValueFetcher;
@@ -55,7 +54,6 @@ import org.elasticsearch.inference.MinimalServiceSettings;
 import org.elasticsearch.inference.TaskType;
 import org.elasticsearch.logging.LogManager;
 import org.elasticsearch.logging.Logger;
-import org.elasticsearch.script.ScriptCompiler;
 import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentFactory;
 import org.elasticsearch.xcontent.XContentLocation;
@@ -77,7 +75,6 @@ import java.util.function.Supplier;
 
 import static org.elasticsearch.inference.TaskType.EMBEDDING;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.CHUNKED_EMBEDDINGS_FIELD;
-import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.CHUNKED_INPUT_INDEX_FIELD;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.CHUNKED_OFFSET_FIELD;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.CHUNKING_SETTINGS_FIELD;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.CHUNKS_FIELD;
@@ -324,14 +321,6 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
                 chunksField.add(createEmbeddingsField(resolvedModelSettings));
             }
             chunksField.add(new OffsetSourceFieldMapper.Builder(CHUNKED_OFFSET_FIELD));
-            chunksField.add(
-                new NumberFieldMapper.Builder(
-                    CHUNKED_INPUT_INDEX_FIELD,
-                    NumberFieldMapper.NumberType.INTEGER,
-                    ScriptCompiler.NONE,
-                    indexSettings
-                )
-            );
             return chunksField;
         }
 
@@ -749,8 +738,12 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
         try (XContentBuilder builder = XContentFactory.contentBuilder(contentType)) {
             builder.startObject();
             builder.field("field", fieldName);
-            builder.field("start", chunk.startOffset());
-            builder.field("end", chunk.endOffset());
+            if (chunk.inputIndex() != null) {
+                builder.field("input_index", chunk.inputIndex());
+            } else {
+                builder.field("start", chunk.startOffset());
+                builder.field("end", chunk.endOffset());
+            }
             builder.endObject();
             try (
                 XContentParser subParser = XContentHelper.createParserNotCompressed(

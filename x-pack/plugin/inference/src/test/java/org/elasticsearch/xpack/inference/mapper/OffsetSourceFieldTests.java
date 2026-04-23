@@ -69,4 +69,49 @@ public class OffsetSourceFieldTests extends ESTestCase {
 
         IOUtils.close(reader, dir);
     }
+
+    public void testInputIndex() throws Exception {
+        Directory dir = newDirectory();
+        RandomIndexWriter writer = new RandomIndexWriter(
+            random(),
+            dir,
+            newIndexWriterConfig().setMergePolicy(newLogMergePolicy(random().nextBoolean()))
+        );
+
+        Document doc = new Document();
+        OffsetSourceField field = new OffsetSourceField("field1", "foo", 0);
+        doc.add(field);
+        writer.addDocument(doc);
+
+        // Offset-bearing doc interleaved with input-index-bearing docs.
+        field.setValues("bar", 5, 42);
+        writer.addDocument(doc);
+
+        field.setValues("foo", 7);
+        writer.addDocument(doc);
+
+        writer.addDocument(new Document()); // gap
+
+        field.setValues("baz", 123);
+        writer.addDocument(doc);
+
+        writer.forceMerge(1);
+        var reader = writer.getReader();
+        writer.close();
+
+        var searcher = newSearcher(reader);
+        var context = searcher.getIndexReader().leaves().get(0);
+
+        var terms = context.reader().terms("field1");
+        assertNotNull(terms);
+        OffsetSourceField.OffsetSourceLoader loader = OffsetSourceField.loader(terms);
+
+        assertEquals(new OffsetSourceFieldMapper.OffsetSource("foo", 0), loader.advanceTo(0));
+        assertEquals(new OffsetSourceFieldMapper.OffsetSource("bar", 5, 42), loader.advanceTo(1));
+        assertEquals(new OffsetSourceFieldMapper.OffsetSource("foo", 7), loader.advanceTo(2));
+        assertNull(loader.advanceTo(3));
+        assertEquals(new OffsetSourceFieldMapper.OffsetSource("baz", 123), loader.advanceTo(4));
+
+        IOUtils.close(reader, dir);
+    }
 }

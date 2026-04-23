@@ -214,7 +214,7 @@ public class OffsetSourceFieldMapperTests extends MapperTestCase {
             }
             b.endArray();
         })));
-        assertThat(exc.getCause().getCause().getCause().getMessage(), containsString("Illegal offsets"));
+        assertThat(rootCauseMessage(exc), containsString("Illegal offsets"));
     }
 
     @Override
@@ -226,4 +226,13 @@ public class OffsetSourceFieldMapperTests extends MapperTestCase {
     protected boolean supportsDocValuesSkippers() {
         return false;
     }
+
+    private static String rootCauseMessage(Throwable t) {
+        Throwable cause = t;
+        while (cause.getCause() != null && cause.getCause() != cause) {
+            cause = cause.getCause();
+        }
+        return cause.getMessage();
+    }
+
 }
