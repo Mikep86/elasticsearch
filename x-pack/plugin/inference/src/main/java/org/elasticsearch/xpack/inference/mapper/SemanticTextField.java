@@ -86,6 +86,7 @@ public record SemanticTextField(
         Map<String, List<Chunk>> chunks
     ) {}
 
+    // TODO: Convert to class, enforce text/offset/input index only constructors
     public record Chunk(@Nullable String text, int startOffset, int endOffset, @Nullable Integer inputIndex, BytesReference rawEmbeddings) {
         private static final int NO_OFFSET = -1;
 

@@ -162,6 +162,7 @@ public final class OffsetSourceField extends Field {
             }
         }
 
+        // TODO: Use index version to differentiate between sentinel and empty chunk
         public OffsetSourceFieldMapper.OffsetSource advanceTo(int doc) throws IOException {
             for (var it = postingsEnums.entrySet().iterator(); it.hasNext();) {
                 var entry = it.next();
