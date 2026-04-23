@@ -85,7 +85,28 @@ public record SemanticTextField(
         Map<String, List<Chunk>> chunks
     ) {}
 
-    public record Chunk(@Nullable String text, int startOffset, int endOffset, BytesReference rawEmbeddings) {}
+    public record Chunk(@Nullable String text, int startOffset, int endOffset, @Nullable Integer inputIndex, BytesReference rawEmbeddings) {
+        private static final int NO_OFFSET = -1;
+
+        public Chunk {
+            // Temporary logic to ensure no callers set inputIndex until support is implemented
+            if (inputIndex != null && SemanticFieldMapper.SEMANTIC_FIELD_FEATURE_FLAG.isEnabled() == false) {
+                throw new IllegalStateException("inputIndex is not supported yet");
+            }
+        }
+
+        public Chunk(String text, BytesReference rawEmbeddings) {
+            this(text, NO_OFFSET, NO_OFFSET, null, rawEmbeddings);
+        }
+
+        public Chunk(int startOffset, int endOffset, BytesReference rawEmbeddings) {
+            this(null, startOffset, endOffset, null, rawEmbeddings);
+        }
+
+        public Chunk(int inputIndex, BytesReference rawEmbeddings) {
+            this(null, NO_OFFSET, NO_OFFSET, inputIndex, rawEmbeddings);
+        }
+    }
 
     public static String getOriginalTextFieldName(String fieldName) {
         return fieldName + "." + TEXT_FIELD;
@@ -242,7 +263,13 @@ public record SemanticTextField(
             if (context.useLegacyFormat() && text == null) {
                 throw new IllegalArgumentException("Missing chunk text");
             }
-            return new Chunk(text, args[1] != null ? (int) args[1] : -1, args[2] != null ? (int) args[2] : -1, (BytesReference) args[3]);
+            return new Chunk(
+                text,
+                args[1] != null ? (int) args[1] : -1,
+                args[2] != null ? (int) args[2] : -1,
+                null,  // TODO: Set input index
+                (BytesReference) args[3]
+            );
         }
     );
 
@@ -321,10 +348,9 @@ public record SemanticTextField(
      * Converts the provided {@link ChunkedInference} into a list of {@link Chunk}.
      */
     public static Chunk toSemanticTextFieldChunk(int offsetAdjustment, ChunkedInference.Chunk chunk) {
-        String text = null;
         int startOffset = chunk.textOffset().start() + offsetAdjustment;
         int endOffset = chunk.textOffset().end() + offsetAdjustment;
-        return new Chunk(text, startOffset, endOffset, chunk.bytesReference());
+        return new Chunk(startOffset, endOffset, chunk.bytesReference());
     }
 
     public static List<Chunk> toSemanticTextFieldChunksLegacy(String input, ChunkedInference results, XContentType contentType)
@@ -339,7 +365,7 @@ public record SemanticTextField(
 
     public static Chunk toSemanticTextFieldChunkLegacy(String input, org.elasticsearch.inference.ChunkedInference.Chunk chunk) {
         var text = input.substring(chunk.textOffset().start(), chunk.textOffset().end());
-        return new Chunk(text, -1, -1, chunk.bytesReference());
+        return new Chunk(text, chunk.bytesReference());
     }
 
     @Override

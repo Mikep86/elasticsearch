@@ -143,7 +143,6 @@ class SemanticFieldValueFetcher implements ValueFetcher {
             var fullChunks = chunkMap.computeIfAbsent(offset.field(), k -> new ArrayList<>());
             fullChunks.add(
                 new SemanticTextField.Chunk(
-                    null,
                     offset.start(),
                     offset.end(),
                     rawEmbeddings(embeddingsFieldLoader::write, source.sourceContentType())
