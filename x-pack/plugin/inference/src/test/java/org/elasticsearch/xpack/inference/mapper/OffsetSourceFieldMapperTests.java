@@ -210,7 +210,7 @@ public class OffsetSourceFieldMapperTests extends MapperTestCase {
             }
             b.endArray();
         })));
-        assertThat(rootCauseMessage(exc), containsString("Illegal offsets"));
+        assertThat(rootCause(exc).getMessage(), containsString("Illegal offsets"));
     }
 
     public void testInputIndex() throws Exception {
@@ -235,7 +235,20 @@ public class OffsetSourceFieldMapperTests extends MapperTestCase {
             DocumentParsingException.class,
             () -> mapper.parse(source(b -> b.startObject("field").field("field", "foo").field("input_index", -1).endObject()))
         );
-        assertThat(rootCauseMessage(exc), containsString("Illegal input index"));
+        assertThat(rootCause(exc).getMessage(), containsString("Illegal input index"));
+    }
+
+    public void testInputIndexWithNoFeatureFlag() throws Exception {
+        assumeFalse("Semantic field feature flag is not enabled", SemanticFieldMapper.SEMANTIC_FIELD_FEATURE_FLAG.isEnabled());
+
+        DocumentMapper mapper = createDocumentMapper(fieldMapping(this::minimalMapping));
+        DocumentParsingException exc = expectThrows(
+            DocumentParsingException.class,
+            () -> mapper.parse(source(b -> b.startObject("field").field("field", "foo").field("input_index", 7).endObject()))
+        );
+        Throwable rootCause = rootCause(exc);
+        assertThat(rootCause, instanceOf(UnsupportedOperationException.class));
+        assertThat(rootCause.getMessage(), containsString("Input index is not supported yet"));
     }
 
     public void testRejectBothOffsetsAndInputIndex() throws Exception {
@@ -248,7 +261,7 @@ public class OffsetSourceFieldMapperTests extends MapperTestCase {
                 )
             )
         );
-        assertThat(rootCauseMessage(exc), containsString("must not specify both"));
+        assertThat(rootCause(exc).getMessage(), containsString("must not specify both"));
     }
 
     public void testRejectMissingOffsetsAndInputIndex() throws Exception {
@@ -257,7 +270,7 @@ public class OffsetSourceFieldMapperTests extends MapperTestCase {
             DocumentParsingException.class,
             () -> mapper.parse(source(b -> b.startObject("field").field("field", "foo").endObject()))
         );
-        assertThat(rootCauseMessage(exc), containsString("requires either"));
+        assertThat(rootCause(exc).getMessage(), containsString("requires either"));
     }
 
     public void testOffsetSentinel() throws IOException {
@@ -307,12 +320,12 @@ public class OffsetSourceFieldMapperTests extends MapperTestCase {
         return false;
     }
 
-    private static String rootCauseMessage(Throwable t) {
+    private static Throwable rootCause(Throwable t) {
         Throwable cause = t;
         while (cause.getCause() != null && cause.getCause() != cause) {
             cause = cause.getCause();
         }
-        return cause.getMessage();
+        return cause;
     }
 
     private static void assertTokenStream(TokenStream tk, String expectedTerm, int expectedStartOffset, int expectedEndOffset)
