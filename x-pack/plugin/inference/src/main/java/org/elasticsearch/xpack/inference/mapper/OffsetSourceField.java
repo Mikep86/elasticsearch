@@ -184,6 +184,10 @@ public final class OffsetSourceField extends Field {
 
                     if (indexVersion.onOrAfter(SEMANTIC_FIELD_TYPE) && startOffset == 0 && endOffset == 0) {
                         // Sentinel for inputIndex form; the absolute position carries the value.
+                        // Gate sentinel usage on the index version because there was a time period where empty chunks (which could
+                        // legitimately have start and end offset == 0) could be in the chunk map. This was fixed in
+                        // https://github.com/elastic/elasticsearch/pull/123763. The index version gate ensures that indices that could
+                        // contain empty chunks are mutually exclusive from those that recognize the sentinel value.
                         return new OffsetSourceFieldMapper.OffsetSource(entry.getKey(), position);
                     }
                     return new OffsetSourceFieldMapper.OffsetSource(entry.getKey(), startOffset, endOffset);
