@@ -184,7 +184,7 @@ class SemanticFieldValueFetcher implements ValueFetcher {
                 }
             }
 
-            var offset = offsetsLoader.advanceTo(it.docID());
+            var offset = offsetsLoader.advanceTo(it.docID(), fieldType.getChunksField().indexSettings().getIndexVersionCreated());
             if (offset == null) {
                 throw new IllegalStateException(
                     "Cannot fetch values for field [" + fieldType.name() + "], missing offsets for doc [" + doc + "]"

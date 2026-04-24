@@ -11,6 +11,7 @@ import org.apache.lucene.document.Document;
 import org.apache.lucene.store.Directory;
 import org.apache.lucene.tests.index.RandomIndexWriter;
 import org.elasticsearch.core.IOUtils;
+import org.elasticsearch.index.IndexVersion;
 import org.elasticsearch.test.ESTestCase;
 
 public class OffsetSourceFieldTests extends ESTestCase {
@@ -51,21 +52,21 @@ public class OffsetSourceFieldTests extends ESTestCase {
         assertNotNull(terms);
         OffsetSourceField.OffsetSourceLoader loader = OffsetSourceField.loader(terms);
 
-        var offset = loader.advanceTo(0);
+        var offset = loader.advanceTo(0, IndexVersion.current());
         assertEquals(new OffsetSourceFieldMapper.OffsetSource("foo", 1, 10), offset);
 
-        offset = loader.advanceTo(1);
+        offset = loader.advanceTo(1, IndexVersion.current());
         assertEquals(new OffsetSourceFieldMapper.OffsetSource("bar", 10, 128), offset);
 
-        assertNull(loader.advanceTo(2));
+        assertNull(loader.advanceTo(2, IndexVersion.current()));
 
-        offset = loader.advanceTo(3);
+        offset = loader.advanceTo(3, IndexVersion.current());
         assertEquals(new OffsetSourceFieldMapper.OffsetSource("foo", 50, 256), offset);
 
-        offset = loader.advanceTo(6);
+        offset = loader.advanceTo(6, IndexVersion.current());
         assertEquals(new OffsetSourceFieldMapper.OffsetSource("baz", 32, 512), offset);
 
-        assertNull(loader.advanceTo(189));
+        assertNull(loader.advanceTo(189, IndexVersion.current()));
 
         IOUtils.close(reader, dir);
     }
@@ -106,11 +107,11 @@ public class OffsetSourceFieldTests extends ESTestCase {
         assertNotNull(terms);
         OffsetSourceField.OffsetSourceLoader loader = OffsetSourceField.loader(terms);
 
-        assertEquals(new OffsetSourceFieldMapper.OffsetSource("foo", 0), loader.advanceTo(0));
-        assertEquals(new OffsetSourceFieldMapper.OffsetSource("bar", 5, 42), loader.advanceTo(1));
-        assertEquals(new OffsetSourceFieldMapper.OffsetSource("foo", 7), loader.advanceTo(2));
-        assertNull(loader.advanceTo(3));
-        assertEquals(new OffsetSourceFieldMapper.OffsetSource("baz", 123), loader.advanceTo(4));
+        assertEquals(new OffsetSourceFieldMapper.OffsetSource("foo", 0), loader.advanceTo(0, IndexVersion.current()));
+        assertEquals(new OffsetSourceFieldMapper.OffsetSource("bar", 5, 42), loader.advanceTo(1, IndexVersion.current()));
+        assertEquals(new OffsetSourceFieldMapper.OffsetSource("foo", 7), loader.advanceTo(2, IndexVersion.current()));
+        assertNull(loader.advanceTo(3, IndexVersion.current()));
+        assertEquals(new OffsetSourceFieldMapper.OffsetSource("baz", 123), loader.advanceTo(4, IndexVersion.current()));
 
         IOUtils.close(reader, dir);
     }

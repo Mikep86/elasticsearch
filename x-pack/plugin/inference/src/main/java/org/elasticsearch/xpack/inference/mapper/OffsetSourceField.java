@@ -20,11 +20,14 @@ import org.apache.lucene.index.Term;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.search.DocIdSetIterator;
 import org.elasticsearch.core.Nullable;
+import org.elasticsearch.index.IndexVersion;
 
 import java.io.IOException;
 import java.nio.charset.Charset;
 import java.util.LinkedHashMap;
 import java.util.Map;
+
+import static org.elasticsearch.index.IndexVersions.SEMANTIC_FIELD_TYPE;
 
 /**
  * Represents a {@link Field} that stores a {@link Term} along with either its start and end offsets
@@ -163,8 +166,7 @@ public final class OffsetSourceField extends Field {
             }
         }
 
-        // TODO: Use index version to differentiate between sentinel and empty chunk
-        public OffsetSourceFieldMapper.OffsetSource advanceTo(int doc) throws IOException {
+        public OffsetSourceFieldMapper.OffsetSource advanceTo(int doc, IndexVersion indexVersion) throws IOException {
             for (var it = postingsEnums.entrySet().iterator(); it.hasNext();) {
                 var entry = it.next();
                 var postings = entry.getValue();
@@ -180,7 +182,7 @@ public final class OffsetSourceField extends Field {
                     int startOffset = postings.startOffset();
                     int endOffset = postings.endOffset();
 
-                    if (startOffset == 0 && endOffset == 0) {
+                    if (indexVersion.onOrAfter(SEMANTIC_FIELD_TYPE) && startOffset == 0 && endOffset == 0) {
                         // Sentinel for inputIndex form; the absolute position carries the value.
                         return new OffsetSourceFieldMapper.OffsetSource(entry.getKey(), position);
                     }

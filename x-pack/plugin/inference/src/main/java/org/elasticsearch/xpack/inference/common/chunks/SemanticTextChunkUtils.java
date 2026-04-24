@@ -140,7 +140,7 @@ public class SemanticTextChunkUtils {
         int index = 0;
         while (scorer.docID() < docId) {
             if (offsetReader != null) {
-                var offset = offsetReader.advanceTo(scorer.docID());
+                var offset = offsetReader.advanceTo(scorer.docID(), context.indexVersionCreated());
                 if (offset == null) {
                     throw new IllegalStateException(
                         "Cannot highlight field [" + fieldType.name() + "], missing offsets for doc [" + docId + "]"

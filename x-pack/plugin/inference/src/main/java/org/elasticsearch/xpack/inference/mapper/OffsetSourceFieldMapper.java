@@ -283,7 +283,7 @@ public class OffsetSourceFieldMapper extends FieldMapper {
 
                 @Override
                 public List<Object> fetchValues(Source source, int doc, List<Object> ignoredValues) throws IOException {
-                    var offsetSource = offsetLoader != null ? offsetLoader.advanceTo(doc) : null;
+                    var offsetSource = offsetLoader != null ? offsetLoader.advanceTo(doc, context.indexVersionCreated()) : null;
                     return offsetSource != null ? List.of(offsetSource) : null;
                 }
 
