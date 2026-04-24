@@ -75,11 +75,6 @@ public class OffsetSourceFieldMapper extends FieldMapper {
             if (start > end) {
                 throw new IllegalArgumentException("Illegal offsets, expected start < end, got: " + start + " > " + end);
             }
-            if (start == 0 && end == 0) {
-                // (0, 0) is reserved as an on-disk sentinel in OffsetSourceField to flag postings
-                // that carry an inputIndex rather than offsets.
-                throw new IllegalArgumentException("Illegal offsets, (0, 0) is reserved");
-            }
             this.field = Objects.requireNonNull(field);
             this.start = start;
             this.end = end;
@@ -147,6 +142,10 @@ public class OffsetSourceFieldMapper extends FieldMapper {
             return inputIndex != null
                 ? "OffsetSource[field=" + field + ", inputIndex=" + inputIndex + "]"
                 : "OffsetSource[field=" + field + ", start=" + start + ", end=" + end + "]";
+        }
+
+        private boolean hasOffsets() {
+            return start != NO_OFFSET && end != NO_OFFSET;
         }
     }
 
@@ -352,6 +351,7 @@ public class OffsetSourceFieldMapper extends FieldMapper {
                 throw new UnsupportedOperationException("Input index is not supported yet");
             }
 
+            assert offsetSource.hasOffsets() == (offsetSource.inputIndex() == null);
             OffsetSourceField luceneField = offsetSource.inputIndex() != null
                 ? new OffsetSourceField(fullPath(), offsetSource.field(), offsetSource.inputIndex())
                 : new OffsetSourceField(fullPath(), offsetSource.field(), offsetSource.start(), offsetSource.end());

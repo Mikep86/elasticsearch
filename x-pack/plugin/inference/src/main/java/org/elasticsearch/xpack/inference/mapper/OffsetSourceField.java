@@ -130,6 +130,7 @@ public final class OffsetSourceField extends Field {
                 // Leave offsets at the default (0, 0) sentinel; encode inputIndex as the absolute
                 // position. PositionIncrementAttribute is cumulative and Lucene's initial position
                 // is -1, so increment = inputIndex + 1 yields an absolute position of inputIndex.
+                assert startOffset == 0 && endOffset == 0;
                 positionIncrementAttribute.setPositionIncrement(inputIndex + 1);
             } else {
                 offsetAttribute.setOffset(startOffset, endOffset);
