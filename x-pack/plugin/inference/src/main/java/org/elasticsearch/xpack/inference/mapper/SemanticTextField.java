@@ -41,6 +41,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import static org.elasticsearch.xcontent.ConstructingObjectParser.constructorArg;
 import static org.elasticsearch.xcontent.ConstructingObjectParser.optionalConstructorArg;
@@ -86,27 +87,86 @@ public record SemanticTextField(
         Map<String, List<Chunk>> chunks
     ) {}
 
-    // TODO: Convert to class, enforce text/offset/input index only constructors
-    public record Chunk(@Nullable String text, int startOffset, int endOffset, @Nullable Integer inputIndex, BytesReference rawEmbeddings) {
+    /**
+     * A single chunk of a semantic (text) field. Exactly one of the three forms is populated:
+     * text (legacy format), character offsets, or an input index. Each form has its own
+     * public constructor; there is no mixed-form constructor.
+     */
+    public static final class Chunk {
         private static final int NO_OFFSET = -1;
 
-        public Chunk {
-            // Temporary logic to ensure no callers set inputIndex in release builds
-            if (inputIndex != null && SemanticFieldMapper.SEMANTIC_FIELD_FEATURE_FLAG.isEnabled() == false) {
-                throw new UnsupportedOperationException("Input index is not supported yet");
-            }
-        }
+        @Nullable
+        private final String text;
+        private final int startOffset;
+        private final int endOffset;
+        @Nullable
+        private final Integer inputIndex;
+        private final BytesReference rawEmbeddings;
 
+        /** Text-form chunk (used by the legacy semantic_text format). */
         public Chunk(String text, BytesReference rawEmbeddings) {
             this(text, NO_OFFSET, NO_OFFSET, null, rawEmbeddings);
         }
 
+        /** Offset-form chunk, identifying a character span in the original source field. */
         public Chunk(int startOffset, int endOffset, BytesReference rawEmbeddings) {
             this(null, startOffset, endOffset, null, rawEmbeddings);
         }
 
+        /** Input-index-form chunk, identifying which of several input values the chunk refers to. */
         public Chunk(int inputIndex, BytesReference rawEmbeddings) {
             this(null, NO_OFFSET, NO_OFFSET, inputIndex, rawEmbeddings);
+        }
+
+        private Chunk(@Nullable String text, int startOffset, int endOffset, @Nullable Integer inputIndex, BytesReference rawEmbeddings) {
+            // Temporary logic to ensure no callers set inputIndex in release builds
+            if (inputIndex != null && SemanticFieldMapper.SEMANTIC_FIELD_FEATURE_FLAG.isEnabled() == false) {
+                throw new UnsupportedOperationException("Input index is not supported yet");
+            }
+            this.text = text;
+            this.startOffset = startOffset;
+            this.endOffset = endOffset;
+            this.inputIndex = inputIndex;
+            this.rawEmbeddings = rawEmbeddings;
+        }
+
+        @Nullable
+        public String text() {
+            return text;
+        }
+
+        public int startOffset() {
+            return startOffset;
+        }
+
+        public int endOffset() {
+            return endOffset;
+        }
+
+        @Nullable
+        public Integer inputIndex() {
+            return inputIndex;
+        }
+
+        public BytesReference rawEmbeddings() {
+            return rawEmbeddings;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            Chunk that = (Chunk) o;
+            return startOffset == that.startOffset
+                && endOffset == that.endOffset
+                && Objects.equals(text, that.text)
+                && Objects.equals(inputIndex, that.inputIndex)
+                && Objects.equals(rawEmbeddings, that.rawEmbeddings);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(text, startOffset, endOffset, inputIndex, rawEmbeddings);
         }
     }
 
