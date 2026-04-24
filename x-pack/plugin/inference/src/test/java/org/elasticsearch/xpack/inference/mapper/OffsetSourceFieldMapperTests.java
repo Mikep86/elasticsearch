@@ -14,6 +14,8 @@ import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute;
 import org.apache.lucene.index.IndexableField;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.index.IndexVersion;
+import org.elasticsearch.index.IndexVersions;
 import org.elasticsearch.index.mapper.DocumentMapper;
 import org.elasticsearch.index.mapper.DocumentParsingException;
 import org.elasticsearch.index.mapper.MappedFieldType;
@@ -26,6 +28,7 @@ import org.elasticsearch.index.query.SearchExecutionContext;
 import org.elasticsearch.plugins.Plugin;
 import org.elasticsearch.search.lookup.Source;
 import org.elasticsearch.search.lookup.SourceProvider;
+import org.elasticsearch.test.index.IndexVersionUtils;
 import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xpack.inference.InferencePlugin;
 import org.junit.AssumptionViolatedException;
@@ -39,6 +42,7 @@ import java.util.Set;
 
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.hasSize;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -254,6 +258,43 @@ public class OffsetSourceFieldMapperTests extends MapperTestCase {
             () -> mapper.parse(source(b -> b.startObject("field").field("field", "foo").endObject()))
         );
         assertThat(rootCauseMessage(exc), containsString("requires either"));
+    }
+
+    public void testOffsetSentinel() throws IOException {
+        for (int i = 0; i < 20; i++) {
+            // Pre-sentinel mapper: (0, 0) is read back as a legitimate zero-length offset span.
+            assertOffsetSentinelFetch(
+                IndexVersionUtils.randomPreviousCompatibleVersion(IndexVersions.SEMANTIC_FIELD_TYPE),
+                new OffsetSourceFieldMapper.OffsetSource("foo", 0, 0)
+            );
+            // Post-sentinel mapper: (0, 0) is read back as the inputIndex sentinel with inputIndex == 0
+            // (the default PositionIncrementAttribute of 1 lands the token at absolute position 0).
+            assertOffsetSentinelFetch(
+                IndexVersionUtils.randomVersionOnOrAfter(IndexVersions.SEMANTIC_FIELD_TYPE),
+                new OffsetSourceFieldMapper.OffsetSource("foo", 0)
+            );
+        }
+    }
+
+    private void assertOffsetSentinelFetch(IndexVersion indexVersion, OffsetSourceFieldMapper.OffsetSource expected) throws IOException {
+        MapperService mapperService = createMapperService(indexVersion, fieldMapping(this::minimalMapping));
+        MappedFieldType ft = mapperService.fieldType("field");
+        SourceToParse source = source(b -> b.startObject("field").field("field", "foo").field("start", 0).field("end", 0).endObject());
+
+        SearchExecutionContext searchExecutionContext = mock(SearchExecutionContext.class);
+        when(searchExecutionContext.getIndexSettings()).thenReturn(mapperService.getIndexSettings());
+        when(searchExecutionContext.indexVersionCreated()).thenReturn(indexVersion);
+
+        ValueFetcher fetcher = ft.valueFetcher(searchExecutionContext, null);
+        ParsedDocument doc = mapperService.documentMapper().parse(source);
+        withLuceneIndex(mapperService, iw -> iw.addDocuments(doc.docs()), ir -> {
+            Source s = SourceProvider.fromLookup(mapperService.mappingLookup(), null, mapperService.getMapperMetrics().sourceFieldMetrics())
+                .getSource(ir.leaves().get(0), 0);
+            fetcher.setNextReader(ir.leaves().get(0));
+            List<Object> fromNative = fetcher.fetchValues(s, 0, new ArrayList<>());
+            assertThat(fromNative, hasSize(1));
+            assertThat(fromNative.get(0), equalTo(expected));
+        });
     }
 
     @Override
