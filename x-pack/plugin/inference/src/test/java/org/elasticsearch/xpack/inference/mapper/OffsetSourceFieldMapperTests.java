@@ -214,6 +214,8 @@ public class OffsetSourceFieldMapperTests extends MapperTestCase {
     }
 
     public void testInputIndex() throws Exception {
+        assumeTrue("Semantic field feature flag is enabled", SemanticFieldMapper.SEMANTIC_FIELD_FEATURE_FLAG.isEnabled());
+
         DocumentMapper mapper = createDocumentMapper(fieldMapping(this::minimalMapping));
 
         ParsedDocument doc1 = mapper.parse(source(b -> b.startObject("field").field("field", "foo").field("input_index", 0).endObject()));
