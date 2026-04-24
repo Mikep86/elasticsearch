@@ -83,7 +83,7 @@ public class OffsetSourceFieldMapper extends FieldMapper {
 
         public OffsetSource(String field, int inputIndex) {
             if (inputIndex < 0) {
-                throw new IllegalArgumentException("Illegal input ndex, expected non-negative, got: " + inputIndex);
+                throw new IllegalArgumentException("Illegal input index, expected non-negative, got: " + inputIndex);
             }
             this.field = Objects.requireNonNull(field);
             this.start = NO_OFFSET;

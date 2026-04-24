@@ -10,6 +10,7 @@ package org.elasticsearch.xpack.inference.mapper;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.analysis.tokenattributes.CharTermAttribute;
 import org.apache.lucene.analysis.tokenattributes.OffsetAttribute;
+import org.apache.lucene.analysis.tokenattributes.PositionIncrementAttribute;
 import org.apache.lucene.index.IndexableField;
 import org.elasticsearch.common.Strings;
 import org.elasticsearch.common.settings.Settings;
@@ -144,17 +145,6 @@ public class OffsetSourceFieldMapperTests extends MapperTestCase {
         assertTokenStream(offsetField2.tokenStream(null, null), "bar", 128, 512);
     }
 
-    private void assertTokenStream(TokenStream tk, String expectedTerm, int expectedStartOffset, int expectedEndOffset) throws IOException {
-        CharTermAttribute termAttribute = tk.addAttribute(CharTermAttribute.class);
-        OffsetAttribute offsetAttribute = tk.addAttribute(OffsetAttribute.class);
-        tk.reset();
-        assertTrue(tk.incrementToken());
-        assertThat(new String(termAttribute.buffer(), 0, termAttribute.length()), equalTo(expectedTerm));
-        assertThat(offsetAttribute.startOffset(), equalTo(expectedStartOffset));
-        assertThat(offsetAttribute.endOffset(), equalTo(expectedEndOffset));
-        assertFalse(tk.incrementToken());
-    }
-
     @Override
     protected void assertFetch(MapperService mapperService, String field, Object value, String format) throws IOException {
         MappedFieldType ft = mapperService.fieldType(field);
@@ -219,6 +209,53 @@ public class OffsetSourceFieldMapperTests extends MapperTestCase {
         assertThat(rootCauseMessage(exc), containsString("Illegal offsets"));
     }
 
+    public void testInputIndex() throws Exception {
+        DocumentMapper mapper = createDocumentMapper(fieldMapping(this::minimalMapping));
+
+        ParsedDocument doc1 = mapper.parse(source(b -> b.startObject("field").field("field", "foo").field("input_index", 0).endObject()));
+        List<IndexableField> fields = doc1.rootDoc().getFields("field");
+        assertEquals(1, fields.size());
+        assertThat(fields.get(0), instanceOf(OffsetSourceField.class));
+        OffsetSourceField offsetField1 = (OffsetSourceField) fields.get(0);
+
+        ParsedDocument doc2 = mapper.parse(source(b -> b.startObject("field").field("field", "bar").field("input_index", 42).endObject()));
+        OffsetSourceField offsetField2 = (OffsetSourceField) doc2.rootDoc().getFields("field").get(0);
+
+        assertTokenStream(offsetField1.tokenStream(null, null), "foo", 0);
+        assertTokenStream(offsetField2.tokenStream(null, null), "bar", 42);
+    }
+
+    public void testInvalidInputIndex() throws Exception {
+        DocumentMapper mapper = createDocumentMapper(fieldMapping(this::minimalMapping));
+        DocumentParsingException exc = expectThrows(
+            DocumentParsingException.class,
+            () -> mapper.parse(source(b -> b.startObject("field").field("field", "foo").field("input_index", -1).endObject()))
+        );
+        assertThat(rootCauseMessage(exc), containsString("Illegal input index"));
+    }
+
+    public void testRejectBothOffsetsAndInputIndex() throws Exception {
+        DocumentMapper mapper = createDocumentMapper(fieldMapping(this::minimalMapping));
+        DocumentParsingException exc = expectThrows(
+            DocumentParsingException.class,
+            () -> mapper.parse(
+                source(
+                    b -> b.startObject("field").field("field", "foo").field("start", 0).field("end", 10).field("input_index", 1).endObject()
+                )
+            )
+        );
+        assertThat(rootCauseMessage(exc), containsString("must not specify both"));
+    }
+
+    public void testRejectMissingOffsetsAndInputIndex() throws Exception {
+        DocumentMapper mapper = createDocumentMapper(fieldMapping(this::minimalMapping));
+        DocumentParsingException exc = expectThrows(
+            DocumentParsingException.class,
+            () -> mapper.parse(source(b -> b.startObject("field").field("field", "foo").endObject()))
+        );
+        assertThat(rootCauseMessage(exc), containsString("requires either"));
+    }
+
     @Override
     protected List<SortShortcutSupport> getSortShortcutSupport() {
         return List.of();
@@ -237,4 +274,32 @@ public class OffsetSourceFieldMapperTests extends MapperTestCase {
         return cause.getMessage();
     }
 
+    private static void assertTokenStream(TokenStream tk, String expectedTerm, int expectedStartOffset, int expectedEndOffset)
+        throws IOException {
+        CharTermAttribute termAttribute = tk.addAttribute(CharTermAttribute.class);
+        OffsetAttribute offsetAttribute = tk.addAttribute(OffsetAttribute.class);
+
+        tk.reset();
+        assertTrue(tk.incrementToken());
+        assertThat(new String(termAttribute.buffer(), 0, termAttribute.length()), equalTo(expectedTerm));
+        assertThat(offsetAttribute.startOffset(), equalTo(expectedStartOffset));
+        assertThat(offsetAttribute.endOffset(), equalTo(expectedEndOffset));
+        assertFalse(tk.incrementToken());
+    }
+
+    private static void assertTokenStream(TokenStream tk, String expectedTerm, int expectedInputIndex) throws IOException {
+        CharTermAttribute termAttribute = tk.addAttribute(CharTermAttribute.class);
+        OffsetAttribute offsetAttribute = tk.addAttribute(OffsetAttribute.class);
+        PositionIncrementAttribute posIncAttribute = tk.addAttribute(PositionIncrementAttribute.class);
+
+        tk.reset();
+        assertTrue(tk.incrementToken());
+        assertThat(new String(termAttribute.buffer(), 0, termAttribute.length()), equalTo(expectedTerm));
+        assertThat(offsetAttribute.startOffset(), equalTo(0));
+        assertThat(offsetAttribute.endOffset(), equalTo(0));
+        // PositionIncrementAttribute is cumulative from an initial position of -1, so for a
+        // single-token stream the increment is inputIndex + 1 to land at absolute position inputIndex.
+        assertThat(posIncAttribute.getPositionIncrement(), equalTo(expectedInputIndex + 1));
+        assertFalse(tk.incrementToken());
+    }
 }
