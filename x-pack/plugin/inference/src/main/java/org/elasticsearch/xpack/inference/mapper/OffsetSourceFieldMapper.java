@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import static org.elasticsearch.index.IndexVersions.SEMANTIC_FIELD_TYPE;
 import static org.elasticsearch.xcontent.ConstructingObjectParser.constructorArg;
 import static org.elasticsearch.xcontent.ConstructingObjectParser.optionalConstructorArg;
 
@@ -346,9 +347,21 @@ public class OffsetSourceFieldMapper extends FieldMapper {
         try {
             var offsetSource = OFFSET_SOURCE_PARSER.parse(parser, null);
 
-            // Temporary logic to ensure input index is not used in release builds
-            if (offsetSource.inputIndex() != null && SemanticFieldMapper.SEMANTIC_FIELD_FEATURE_FLAG.isEnabled() == false) {
-                throw new UnsupportedOperationException("Input index is not supported yet");
+            if (offsetSource.inputIndex() != null) {
+                // Temporary logic to ensure input index is not used in release builds
+                if (SemanticFieldMapper.SEMANTIC_FIELD_FEATURE_FLAG.isEnabled() == false) {
+                    throw new UnsupportedOperationException("Input index is not supported yet");
+                }
+
+                if (context.indexSettings().getIndexVersionCreated().before(SEMANTIC_FIELD_TYPE)) {
+                    throw new IllegalStateException(
+                        "Input index cannot be set on indices with index version < "
+                            + SEMANTIC_FIELD_TYPE
+                            + "(detected index version: "
+                            + context.indexSettings().getIndexVersionCreated()
+                            + ")"
+                    );
+                }
             }
 
             assert offsetSource.hasOffsets() == (offsetSource.inputIndex() == null);
