@@ -188,6 +188,11 @@ public final class OffsetSourceField extends Field {
                     int endOffset = postings.endOffset();
 
                     if (indexVersion.onOrAfter(SEMANTIC_FIELD_TYPE) && startOffset == 0 && endOffset == 0) {
+                        // Temporary logic to ensure input index is not used in release builds
+                        if (SemanticFieldMapper.SEMANTIC_FIELD_FEATURE_FLAG.isEnabled() == false) {
+                            throw new UnsupportedOperationException("Input index is not supported yet");
+                        }
+
                         // Sentinel for inputIndex form; the absolute position carries the value.
                         // Gate sentinel usage on the index version because there was a time period where empty chunks (which could
                         // legitimately have start and end offset == 0) could be in the chunk map. This was fixed in
