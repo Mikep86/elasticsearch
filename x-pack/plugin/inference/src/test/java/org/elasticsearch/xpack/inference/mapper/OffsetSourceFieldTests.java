@@ -74,6 +74,8 @@ public class OffsetSourceFieldTests extends ESTestCase {
     }
 
     public void testInputIndex() throws Exception {
+        assumeTrue("Semantic field feature flag is enabled", SemanticFieldMapper.SEMANTIC_FIELD_FEATURE_FLAG.isEnabled());
+
         Directory dir = newDirectory();
         RandomIndexWriter writer = new RandomIndexWriter(
             random(),
