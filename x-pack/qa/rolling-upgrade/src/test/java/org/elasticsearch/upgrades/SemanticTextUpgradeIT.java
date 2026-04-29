@@ -233,9 +233,10 @@ public class SemanticTextUpgradeIT extends AbstractUpgradeTestCase {
 
             builder.field("highlight", highlightBuilder);
         }
-        builder.startObject("_source");
-        builder.field("includes", "_inference_fields");
-        builder.endObject();
+        // Use the fields parameter to get _inference_fields for compatibility with old stack versions
+        builder.startArray("fields");
+        builder.value("_inference_fields");
+        builder.endArray();
         builder.endObject();
 
         Request request = new Request("GET", getIndexName() + "/_search");
