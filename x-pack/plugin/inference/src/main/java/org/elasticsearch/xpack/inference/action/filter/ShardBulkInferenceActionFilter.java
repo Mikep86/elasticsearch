@@ -194,38 +194,18 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
 
     private record InferenceProvider(InferenceService service, Model model) {}
 
-    /**
-     * The field inference response.
-     * @param field The target field.
-     * @param sourceField The input that was used to run inference.
-     * @param input The input that was used to run inference.
-     * @param inputOrder The original order of the input.
-     * @param offsetAdjustment The adjustment to apply to the chunk text offsets.
-     * @param model The model used to run inference.
-     * @param chunkedResults The actual results.
-     */
-    private record FieldInferenceResponse(
-        String field,
-        String sourceField,
-        String input,
-        int inputOrder,
-        int offsetAdjustment,
-        Model model,
-        ChunkedInference chunkedResults
-    ) {}
-
     private record FieldInferenceResponseAccumulator(
         int id,
-        Map<String, List<FieldInferenceResponse>> responses,
+        Map<String, List<ChunkedStringFieldInferenceResponse>> responses,
         AtomicReference<Exception> failure
     ) {
         private FieldInferenceResponseAccumulator(int id) {
             this(id, new HashMap<>(), new AtomicReference<>(null));
         }
 
-        void addOrUpdateResponse(FieldInferenceResponse response) {
+        void addOrUpdateResponse(ChunkedStringFieldInferenceResponse response) {
             synchronized (this) {
-                var list = responses.computeIfAbsent(response.field, k -> new ArrayList<>());
+                var list = responses.computeIfAbsent(response.field(), k -> new ArrayList<>());
                 list.add(response);
             }
         }
@@ -405,7 +385,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                         } else {
                             success++;
                             acc.addOrUpdateResponse(
-                                new FieldInferenceResponse(
+                                new ChunkedStringFieldInferenceResponse(
                                     request.field(),
                                     request.sourceField(),
                                     useLegacyFormat ? request.input() : null,
@@ -549,7 +529,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
 
                         var slot = ensureResponseAccumulatorSlot(itemIndex);
                         slot.addOrUpdateResponse(
-                            new FieldInferenceResponse(field, sourceField, null, order++, 0, null, EMPTY_CHUNKED_INFERENCE)
+                            new ChunkedStringFieldInferenceResponse(field, sourceField, null, order++, 0, null, EMPTY_CHUNKED_INFERENCE)
                         );
                         continue;
                     }
@@ -587,7 +567,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
 
                         if (v.isBlank()) {
                             slot.addOrUpdateResponse(
-                                new FieldInferenceResponse(field, sourceField, v, order++, 0, null, EMPTY_CHUNKED_INFERENCE)
+                                new ChunkedStringFieldInferenceResponse(field, sourceField, v, order++, 0, null, EMPTY_CHUNKED_INFERENCE)
                             );
                         } else {
                             requests.add(
@@ -705,18 +685,18 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                 for (var resp : responses) {
                     // Get the first non-null model from the response list
                     if (model == null) {
-                        model = resp.model;
+                        model = resp.model();
                     }
 
-                    var lst = chunkMap.computeIfAbsent(resp.sourceField, k -> new ArrayList<>());
+                    var lst = chunkMap.computeIfAbsent(resp.sourceField(), k -> new ArrayList<>());
                     var chunks = useLegacyFormat
-                        ? toSemanticTextFieldChunksLegacy(resp.input, resp.chunkedResults, indexRequest.getContentType())
-                        : toSemanticTextFieldChunks(resp.offsetAdjustment, resp.chunkedResults, indexRequest.getContentType());
+                        ? toSemanticTextFieldChunksLegacy(resp.input(), resp.chunkedResults(), indexRequest.getContentType())
+                        : toSemanticTextFieldChunks(resp.offsetAdjustment(), resp.chunkedResults(), indexRequest.getContentType());
                     lst.addAll(chunks);
                 }
 
                 List<String> inputs = useLegacyFormat
-                    ? responses.stream().filter(r -> r.sourceField().equals(fieldName)).map(r -> r.input).collect(Collectors.toList())
+                    ? responses.stream().filter(r -> r.sourceField().equals(fieldName)).map(r -> r.input()).collect(Collectors.toList())
                     : null;
 
                 // The model can be null if we are only processing update requests that clear inference results. This is ok because we will
