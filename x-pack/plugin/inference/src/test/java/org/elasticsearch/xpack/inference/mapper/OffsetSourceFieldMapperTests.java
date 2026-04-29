@@ -282,12 +282,15 @@ public class OffsetSourceFieldMapperTests extends MapperTestCase {
                 IndexVersionUtils.randomPreviousCompatibleVersion(IndexVersions.SEMANTIC_FIELD_TYPE),
                 new OffsetSourceFieldMapper.OffsetSource("foo", 0, 0)
             );
-            // Post-sentinel mapper: (0, 0) is read back as the inputIndex sentinel with inputIndex == 0
-            // (the default PositionIncrementAttribute of 1 lands the token at absolute position 0).
-            assertOffsetSentinelFetch(
-                IndexVersionUtils.randomVersionOnOrAfter(IndexVersions.SEMANTIC_FIELD_TYPE),
-                new OffsetSourceFieldMapper.OffsetSource("foo", 0)
-            );
+
+            if (SemanticFieldMapper.SEMANTIC_FIELD_FEATURE_FLAG.isEnabled()) {
+                // Post-sentinel mapper: (0, 0) is read back as the inputIndex sentinel with inputIndex == 0
+                // (the default PositionIncrementAttribute of 1 lands the token at absolute position 0).
+                assertOffsetSentinelFetch(
+                    IndexVersionUtils.randomVersionOnOrAfter(IndexVersions.SEMANTIC_FIELD_TYPE),
+                    new OffsetSourceFieldMapper.OffsetSource("foo", 0)
+                );
+            }
         }
     }
 
