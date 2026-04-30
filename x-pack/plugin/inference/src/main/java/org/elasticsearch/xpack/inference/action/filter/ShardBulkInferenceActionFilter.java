@@ -197,14 +197,14 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
 
     private record FieldInferenceResponseAccumulator(
         int id,
-        Map<String, List<ChunkedStringFieldInferenceResponse>> responses,
+        Map<String, List<FieldInferenceResponse>> responses,
         AtomicReference<Exception> failure
     ) {
         private FieldInferenceResponseAccumulator(int id) {
             this(id, new HashMap<>(), new AtomicReference<>(null));
         }
 
-        void addOrUpdateResponse(ChunkedStringFieldInferenceResponse response) {
+        void addOrUpdateResponse(FieldInferenceResponse response) {
             synchronized (this) {
                 var list = responses.computeIfAbsent(response.field(), k -> new ArrayList<>());
                 list.add(response);
@@ -252,7 +252,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
             }
 
             var items = bulkShardRequest.items();
-            Map<String, List<ChunkedStringFieldInferenceRequest>> fieldRequestsMap = new HashMap<>();
+            Map<String, List<FieldInferenceRequest>> fieldRequestsMap = new HashMap<>();
             long totalInputLength = 0;
             int itemIndex = itemOffset;
             while (itemIndex < items.length && totalInputLength < batchSizeInBytes) {
@@ -284,15 +284,15 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
 
             try (var releaseOnFinish = new RefCountingRunnable(onInferenceCompletion)) {
                 for (var entry : fieldRequestsMap.entrySet()) {
-                    executeChunkedInferenceAsync(entry.getKey(), null, entry.getValue(), releaseOnFinish.acquire());
+                    executeInferenceAsync(entry.getKey(), null, entry.getValue(), releaseOnFinish.acquire());
                 }
             }
         }
 
-        private void executeChunkedInferenceAsync(
+        private void executeInferenceAsync(
             final String inferenceId,
             @Nullable InferenceProvider inferenceProvider,
-            final List<ChunkedStringFieldInferenceRequest> requests,
+            final List<FieldInferenceRequest> requests,
             final Releasable onFinish
         ) {
             if (inferenceProvider == null) {
@@ -300,7 +300,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                     var service = inferenceServiceRegistry.getService(unparsedModel.service());
                     if (service.isEmpty() == false) {
                         var provider = new InferenceProvider(service.get(), service.get().parsePersistedConfig(unparsedModel));
-                        executeChunkedInferenceAsync(inferenceId, provider, requests, onFinish);
+                        executeInferenceAsync(inferenceId, provider, requests, onFinish);
                     } else {
                         try (onFinish) {
                             for (FieldInferenceRequest request : requests) {
@@ -356,7 +356,35 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                 }
             }
 
-            // This assumes that all inference requests are text only, with no images
+            List<ChunkedStringFieldInferenceRequest> chunkedRequests = new ArrayList<>();
+            List<InferenceStringFieldInferenceRequest> embeddingRequests = new ArrayList<>();
+            for (var r : requests) {
+                if (r instanceof ChunkedStringFieldInferenceRequest c) {
+                    chunkedRequests.add(c);
+                } else if (r instanceof InferenceStringFieldInferenceRequest e) {
+                    embeddingRequests.add(e);
+                } else {
+                    throw new IllegalStateException("Unexpected field inference request type [" + r.getClass().getName() + "]");
+                }
+            }
+
+            // Fan out to the chunked and embedding arms under a child counter that closes onFinish when both arms complete.
+            // Acquire is guarded by the non-empty checks so an absent arm does not leak a ref and orphan onInferenceCompletion.
+            try (var armCounter = new RefCountingRunnable(onFinish::close)) {
+                if (chunkedRequests.isEmpty() == false) {
+                    executeChunkedInferenceAsync(inferenceProvider, chunkedRequests, armCounter.acquire());
+                }
+                if (embeddingRequests.isEmpty() == false) {
+                    executeEmbeddingInferenceAsync(inferenceProvider, embeddingRequests, armCounter.acquire());
+                }
+            }
+        }
+
+        private void executeChunkedInferenceAsync(
+            final InferenceProvider inferenceProvider,
+            final List<ChunkedStringFieldInferenceRequest> requests,
+            final Releasable onFinish
+        ) {
             final List<ChunkInferenceInput> inputs = requests.stream()
                 .map(
                     r -> new ChunkInferenceInput(
@@ -405,7 +433,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
             }, exc -> {
                 try (onFinish) {
                     recordRequestCountMetrics(inferenceProvider.model, requests.size(), exc);
-                    for (FieldInferenceRequest request : requests) {
+                    for (ChunkedStringFieldInferenceRequest request : requests) {
                         setInferenceResponseFailure(
                             request.bulkItemIndex(),
                             new InferenceException(
@@ -440,7 +468,20 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                     TimeValue.MAX_VALUE,
                     completionListener
                 );
+        }
 
+        private void executeEmbeddingInferenceAsync(
+            final InferenceProvider inferenceProvider,
+            final List<InferenceStringFieldInferenceRequest> requests,
+            final Releasable onFinish
+        ) {
+            // TODO: not yet implemented — typed-InferenceString embedding inference (e.g. base64 images) lands in a follow-up.
+            // addFieldInferenceRequests does not produce InferenceStringFieldInferenceRequest today, so this method must not be
+            // reachable in production. Throw to surface any accidental routing here; the try-with-resources still closes onFinish
+            // before the exception propagates so the releasable tree is not orphaned.
+            try (onFinish) {
+                throw new UnsupportedOperationException("embedding inference arm not yet implemented");
+            }
         }
 
         private void recordRequestCountMetrics(Model model, int incrementBy, Throwable throwable) {
@@ -459,11 +500,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
          *                    and the value is a list of associated {@link FieldInferenceRequest} objects.
          * @return The total content length of all newly added requests, or {@code 0} if no requests were added.
          */
-        private long addFieldInferenceRequests(
-            BulkItemRequest item,
-            int itemIndex,
-            Map<String, List<ChunkedStringFieldInferenceRequest>> requestsMap
-        ) {
+        private long addFieldInferenceRequests(BulkItemRequest item, int itemIndex, Map<String, List<FieldInferenceRequest>> requestsMap) {
             boolean isUpdateRequest = false;
             final IndexRequestWithIndexingPressure indexRequest;
             if (item.request() instanceof IndexRequest ir) {
@@ -558,7 +595,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                         break;
                     }
 
-                    List<ChunkedStringFieldInferenceRequest> requests = requestsMap.computeIfAbsent(inferenceId, k -> new ArrayList<>());
+                    List<FieldInferenceRequest> requests = requestsMap.computeIfAbsent(inferenceId, k -> new ArrayList<>());
                     int offsetAdjustment = 0;
                     for (String v : values) {
                         if (incrementIndexingPressurePreInference(indexRequest, itemIndex) == false) {
@@ -689,14 +726,24 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                     }
 
                     var lst = chunkMap.computeIfAbsent(resp.sourceField(), k -> new ArrayList<>());
-                    var chunks = useLegacyFormat
-                        ? toSemanticTextFieldChunksLegacy(resp.input(), resp.chunkedResults(), indexRequest.getContentType())
-                        : toSemanticTextFieldChunks(resp.offsetAdjustment(), resp.chunkedResults(), indexRequest.getContentType());
-                    lst.addAll(chunks);
+                    if (resp instanceof ChunkedStringFieldInferenceResponse c) {
+                        var chunks = useLegacyFormat
+                            ? toSemanticTextFieldChunksLegacy(c.input(), c.chunkedResults(), indexRequest.getContentType())
+                            : toSemanticTextFieldChunks(c.offsetAdjustment(), c.chunkedResults(), indexRequest.getContentType());
+                        lst.addAll(chunks);
+                    } else {
+                        throw new IllegalStateException(
+                            "Unexpected field inference response type [" + resp.getClass().getName() + "] for field [" + fieldName + "]"
+                        );
+                    }
                 }
 
+                // TODO: Check that all response types are of expected type earlier when using the legacy format
                 List<String> inputs = useLegacyFormat
-                    ? responses.stream().filter(r -> r.sourceField().equals(fieldName)).map(r -> r.input()).collect(Collectors.toList())
+                    ? responses.stream()
+                        .filter(r -> r instanceof ChunkedStringFieldInferenceResponse c && c.sourceField().equals(fieldName))
+                        .map(r -> ((ChunkedStringFieldInferenceResponse) r).input())
+                        .collect(Collectors.toList())
                     : null;
 
                 // The model can be null if we are only processing update requests that clear inference results. This is ok because we will
