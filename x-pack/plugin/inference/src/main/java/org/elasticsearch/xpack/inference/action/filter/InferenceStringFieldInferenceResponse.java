@@ -8,9 +8,9 @@
 package org.elasticsearch.xpack.inference.action.filter;
 
 import org.elasticsearch.core.Nullable;
-import org.elasticsearch.inference.InferenceServiceResults;
 import org.elasticsearch.inference.InferenceString;
 import org.elasticsearch.inference.Model;
+import org.elasticsearch.xpack.core.inference.results.EmbeddingResults;
 
 import java.util.Objects;
 
@@ -21,7 +21,7 @@ final class InferenceStringFieldInferenceResponse extends FieldInferenceResponse
     /** The position of the input within its source. */
     private final int inputIndex;
     /** the inference results. */
-    private final InferenceServiceResults inferenceResults;
+    private final EmbeddingResults.Embedding<?> inferenceResults;
 
     InferenceStringFieldInferenceResponse(
         String field,
@@ -29,7 +29,7 @@ final class InferenceStringFieldInferenceResponse extends FieldInferenceResponse
         int inputOrder,
         int inputIndex,
         @Nullable Model model,
-        InferenceServiceResults inferenceResults
+        EmbeddingResults.Embedding<?> inferenceResults
     ) {
         super(field, sourceField, inputOrder, model);
         this.inputIndex = inputIndex;
@@ -40,7 +40,7 @@ final class InferenceStringFieldInferenceResponse extends FieldInferenceResponse
         return inputIndex;
     }
 
-    public InferenceServiceResults inferenceResults() {
+    public EmbeddingResults.Embedding<?> inferenceResults() {
         return inferenceResults;
     }
 

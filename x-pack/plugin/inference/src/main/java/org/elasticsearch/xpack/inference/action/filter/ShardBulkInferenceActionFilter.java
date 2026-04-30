@@ -41,8 +41,10 @@ import org.elasticsearch.inference.ChunkInferenceInput;
 import org.elasticsearch.inference.ChunkedInference;
 import org.elasticsearch.inference.ChunkingSettings;
 import org.elasticsearch.inference.DataType;
+import org.elasticsearch.inference.EmbeddingRequest;
 import org.elasticsearch.inference.InferenceService;
 import org.elasticsearch.inference.InferenceServiceRegistry;
+import org.elasticsearch.inference.InferenceServiceResults;
 import org.elasticsearch.inference.InferenceString;
 import org.elasticsearch.inference.InferenceStringGroup;
 import org.elasticsearch.inference.InputType;
@@ -62,6 +64,7 @@ import org.elasticsearch.xcontent.XContentParserConfiguration;
 import org.elasticsearch.xcontent.XContentType;
 import org.elasticsearch.xpack.core.inference.chunking.ChunkingSettingsBuilder;
 import org.elasticsearch.xpack.core.inference.results.ChunkedInferenceError;
+import org.elasticsearch.xpack.core.inference.results.EmbeddingResults;
 import org.elasticsearch.xpack.inference.InferenceException;
 import org.elasticsearch.xpack.inference.InferenceLicenceCheck;
 import org.elasticsearch.xpack.inference.mapper.SemanticTextField;
@@ -469,12 +472,91 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
             final List<InferenceStringFieldInferenceRequest> requests,
             final Releasable onFinish
         ) {
-            // TODO: not yet implemented — typed-InferenceString embedding inference (e.g. base64 images) lands in a follow-up.
-            // addFieldInferenceRequests does not produce InferenceStringFieldInferenceRequest today, so this method must not be
-            // reachable in production. Throw to surface any accidental routing here; the try-with-resources still closes onFinish
-            // before the exception propagates so the releasable tree is not orphaned.
-            try (onFinish) {
-                throw new UnsupportedOperationException("embedding inference arm not yet implemented");
+            final List<InferenceStringGroup> inputs = requests.stream().map(r -> new InferenceStringGroup(List.of(r.input()))).toList();
+
+            ActionListener<InferenceServiceResults> completionListener = ActionListener.wrap(results -> {
+                try (onFinish) {
+                    if (results instanceof EmbeddingResults<?> == false) {
+                        var typeMismatchException = new IllegalStateException(
+                            "Unexpected inference result type ["
+                                + results.getClass().getName()
+                                + "] for inference id ["
+                                + inferenceProvider.model.getInferenceEntityId()
+                                + "]"
+                        );
+                        recordRequestCountMetrics(inferenceProvider.model, requests.size(), typeMismatchException);
+                        failAllInferenceRequests(requests, typeMismatchException);
+                        return;
+                    }
+
+                    EmbeddingResults<?> embeddingResults = (EmbeddingResults<?>) results;
+                    List<? extends EmbeddingResults.Embedding<?>> embeddings = embeddingResults.embeddings();
+                    if (embeddings.size() != requests.size()) {
+                        var sizeMismatchException = new IllegalStateException(
+                            "Inference result count ["
+                                + embeddings.size()
+                                + "] does not match request count ["
+                                + requests.size()
+                                + "] for inference id ["
+                                + inferenceProvider.model.getInferenceEntityId()
+                                + "]"
+                        );
+                        recordRequestCountMetrics(inferenceProvider.model, requests.size(), sizeMismatchException);
+                        failAllInferenceRequests(requests, sizeMismatchException);
+                        return;
+                    }
+
+                    var requestsIterator = requests.iterator();
+                    for (var embedding : embeddings) {
+                        var request = requestsIterator.next();
+                        inferenceResults.get(request.bulkItemIndex())
+                            .addOrUpdateResponse(
+                                new InferenceStringFieldInferenceResponse(
+                                    request.field(),
+                                    request.sourceField(),
+                                    request.inputOrder(),
+                                    request.inputIndex(),
+                                    inferenceProvider.model,
+                                    embedding
+                                )
+                            );
+                    }
+                    recordRequestCountMetrics(inferenceProvider.model, requests.size(), null);
+                }
+            }, exc -> {
+                try (onFinish) {
+                    recordRequestCountMetrics(inferenceProvider.model, requests.size(), exc);
+                    failAllInferenceRequests(
+                        requests,
+                        new InferenceException(
+                            "Exception when running inference id [{}]",
+                            exc,
+                            inferenceProvider.model.getInferenceEntityId()
+                        )
+                    );
+
+                    if (ExceptionsHelper.status(exc).getStatus() >= 500) {
+                        List<String> fields = requests.stream().map(FieldInferenceRequest::field).distinct().toList();
+                        logger.warn(
+                            "Exception when running inference id ["
+                                + inferenceProvider.model.getInferenceEntityId()
+                                + "] on fields "
+                                + fields,
+                            exc
+                        );
+                    }
+                }
+            });
+
+            EmbeddingRequest embeddingRequest = new EmbeddingRequest(inputs, InputType.INTERNAL_INGEST, Map.of());
+            inferenceProvider.service()
+                .embeddingInfer(inferenceProvider.model(), embeddingRequest, TimeValue.MAX_VALUE, completionListener);
+        }
+
+        // TODO: Use util method more broadly
+        private void failAllInferenceRequests(List<? extends FieldInferenceRequest> requests, Exception failure) {
+            for (var request : requests) {
+                setInferenceResponseFailure(request.bulkItemIndex(), failure);
             }
         }
 
