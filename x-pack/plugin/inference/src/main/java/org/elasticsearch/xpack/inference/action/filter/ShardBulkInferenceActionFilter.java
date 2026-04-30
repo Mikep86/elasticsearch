@@ -33,7 +33,6 @@ import org.elasticsearch.common.util.concurrent.AtomicArray;
 import org.elasticsearch.common.util.concurrent.EsRejectedExecutionException;
 import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.common.xcontent.support.XContentMapValues;
-import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.Releasable;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.IndexingPressure;
@@ -284,68 +283,63 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
 
             try (var releaseOnFinish = new RefCountingRunnable(onInferenceCompletion)) {
                 for (var entry : fieldRequestsMap.entrySet()) {
-                    executeInferenceAsync(entry.getKey(), null, entry.getValue(), releaseOnFinish.acquire());
+                    startInferenceAsync(entry.getKey(), entry.getValue(), releaseOnFinish.acquire());
                 }
             }
         }
 
-        private void executeInferenceAsync(
-            final String inferenceId,
-            @Nullable InferenceProvider inferenceProvider,
-            final List<FieldInferenceRequest> requests,
-            final Releasable onFinish
-        ) {
-            if (inferenceProvider == null) {
-                ActionListener<UnparsedModel> modelLoadingListener = ActionListener.wrap(unparsedModel -> {
-                    var service = inferenceServiceRegistry.getService(unparsedModel.service());
-                    if (service.isEmpty() == false) {
-                        var provider = new InferenceProvider(service.get(), service.get().parsePersistedConfig(unparsedModel));
-                        executeInferenceAsync(inferenceId, provider, requests, onFinish);
-                    } else {
-                        try (onFinish) {
-                            for (FieldInferenceRequest request : requests) {
-                                inferenceResults.get(request.bulkItemIndex())
-                                    .setFailure(
-                                        new ResourceNotFoundException(
-                                            "Inference service [{}] not found for field [{}]",
-                                            unparsedModel.service(),
-                                            request.field()
-                                        )
-                                    );
-                            }
-                        }
-                    }
-                }, exc -> {
+        private void startInferenceAsync(final String inferenceId, final List<FieldInferenceRequest> requests, final Releasable onFinish) {
+            ActionListener<UnparsedModel> modelLoadingListener = ActionListener.wrap(unparsedModel -> {
+                var service = inferenceServiceRegistry.getService(unparsedModel.service());
+                if (service.isEmpty() == false) {
+                    var provider = new InferenceProvider(service.get(), service.get().parsePersistedConfig(unparsedModel));
+                    executeInferenceAsync(provider, requests, onFinish);
+                } else {
                     try (onFinish) {
                         for (FieldInferenceRequest request : requests) {
-                            Exception failure;
-                            if (ExceptionsHelper.unwrap(exc, ResourceNotFoundException.class) instanceof ResourceNotFoundException) {
-                                failure = new ResourceNotFoundException(
-                                    "Inference id [{}] not found for field [{}]",
-                                    inferenceId,
-                                    request.field()
+                            inferenceResults.get(request.bulkItemIndex())
+                                .setFailure(
+                                    new ResourceNotFoundException(
+                                        "Inference service [{}] not found for field [{}]",
+                                        unparsedModel.service(),
+                                        request.field()
+                                    )
                                 );
-                            } else {
-                                failure = new InferenceException(
-                                    "Error loading inference for inference id [{}] on field [{}]",
-                                    exc,
-                                    inferenceId,
-                                    request.field()
-                                );
-                            }
-                            inferenceResults.get(request.bulkItemIndex()).setFailure(failure);
-                        }
-
-                        if (ExceptionsHelper.status(exc).getStatus() >= 500) {
-                            List<String> fields = requests.stream().map(FieldInferenceRequest::field).distinct().toList();
-                            logger.warn("Error loading inference for inference id [" + inferenceId + "] on fields " + fields, exc);
                         }
                     }
-                });
-                modelRegistry.getModelWithSecrets(inferenceId, modelLoadingListener);
-                return;
-            }
+                }
+            }, exc -> {
+                try (onFinish) {
+                    for (FieldInferenceRequest request : requests) {
+                        Exception failure;
+                        if (ExceptionsHelper.unwrap(exc, ResourceNotFoundException.class) instanceof ResourceNotFoundException) {
+                            failure = new ResourceNotFoundException(
+                                "Inference id [{}] not found for field [{}]",
+                                inferenceId,
+                                request.field()
+                            );
+                        } else {
+                            failure = new InferenceException(
+                                "Error loading inference for inference id [{}] on field [{}]",
+                                exc,
+                                inferenceId,
+                                request.field()
+                            );
+                        }
+                        inferenceResults.get(request.bulkItemIndex()).setFailure(failure);
+                    }
 
+                    if (ExceptionsHelper.status(exc).getStatus() >= 500) {
+                        List<String> fields = requests.stream().map(FieldInferenceRequest::field).distinct().toList();
+                        logger.warn("Error loading inference for inference id [" + inferenceId + "] on fields " + fields, exc);
+                    }
+                }
+            });
+
+            modelRegistry.getModelWithSecrets(inferenceId, modelLoadingListener);
+        }
+
+        private void executeInferenceAsync(InferenceProvider inferenceProvider, List<FieldInferenceRequest> requests, Releasable onFinish) {
             if (InferenceLicenceCheck.isServiceLicenced(inferenceProvider.service.name(), licenseState) == false) {
                 try (onFinish) {
                     var complianceException = InferenceLicenceCheck.complianceException(inferenceProvider.service.name());
