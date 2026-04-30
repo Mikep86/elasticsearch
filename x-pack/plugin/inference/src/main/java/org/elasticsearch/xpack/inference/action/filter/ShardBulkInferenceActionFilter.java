@@ -86,6 +86,7 @@ import java.util.stream.Collectors;
 
 import static java.util.Collections.singletonList;
 import static org.elasticsearch.inference.telemetry.InferenceStats.INFERENCE_SOURCE_ATTRIBUTE;
+import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.toSemanticFieldChunk;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.toSemanticTextFieldChunks;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.toSemanticTextFieldChunksLegacy;
 
@@ -802,22 +803,30 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                     }
 
                     var lst = chunkMap.computeIfAbsent(resp.sourceField(), k -> new ArrayList<>());
-                    if (resp instanceof ChunkedStringFieldInferenceResponse c) {
-                        var chunks = useLegacyFormat
-                            ? toSemanticTextFieldChunksLegacy(c.input(), c.chunkedResults(), indexRequest.getContentType())
-                            : toSemanticTextFieldChunks(c.offsetAdjustment(), c.chunkedResults(), indexRequest.getContentType());
-                        lst.addAll(chunks);
-                    } else {
-                        throw new IllegalStateException(
+                    switch (resp) {
+                        case ChunkedStringFieldInferenceResponse c -> {
+                            var chunks = useLegacyFormat
+                                ? toSemanticTextFieldChunksLegacy(c.input(), c.chunkedResults(), indexRequest.getContentType())
+                                : toSemanticTextFieldChunks(c.offsetAdjustment(), c.chunkedResults(), indexRequest.getContentType());
+                            lst.addAll(chunks);
+                        }
+                        case InferenceStringFieldInferenceResponse e -> {
+                            if (useLegacyFormat) {
+                                throw new IllegalStateException(
+                                    "Legacy semantic text format does not support non-text inputs for field [" + fieldName + "]"
+                                );
+                            }
+                            lst.add(toSemanticFieldChunk(e.inputIndex(), e.inferenceResults(), indexRequest.getContentType()));
+                        }
+                        default -> throw new IllegalStateException(
                             "Unexpected field inference response type [" + resp.getClass().getName() + "] for field [" + fieldName + "]"
                         );
                     }
                 }
 
-                // TODO: Check that all response types are of expected type earlier when using the legacy format
                 List<String> inputs = useLegacyFormat
                     ? responses.stream()
-                        .filter(r -> r instanceof ChunkedStringFieldInferenceResponse c && c.sourceField().equals(fieldName))
+                        .filter(r -> r.sourceField().equals(fieldName))
                         .map(r -> ((ChunkedStringFieldInferenceResponse) r).input())
                         .collect(Collectors.toList())
                     : null;
