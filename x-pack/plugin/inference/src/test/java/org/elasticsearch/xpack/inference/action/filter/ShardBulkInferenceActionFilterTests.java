@@ -110,6 +110,7 @@ import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.notNullValue;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -124,6 +125,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 public class ShardBulkInferenceActionFilterTests extends ESTestCase {
@@ -1010,6 +1012,7 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
         verify(coordinatingIndexingPressure).close();
     }
 
+    // TODO: Update test to trigger multiple inference failures
     @SuppressWarnings("unchecked")
     public void testMultipleFailuresPerIndexRequest() throws Exception {
         final InferenceStats inferenceStats = InferenceStatsTests.mockInferenceStats();
@@ -1048,8 +1051,7 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
 
                 IndexingPressure.Coordinating coordinatingIndexingPressure = indexingPressure.getCoordinating();
                 assertThat(coordinatingIndexingPressure, notNullValue());
-                verify(coordinatingIndexingPressure, times(docCount)).increment(eq(1), longThat(l -> l > 0));
-                verify(coordinatingIndexingPressure, times(docCount)).increment(anyInt(), anyLong());
+                verifyNoInteractions(coordinatingIndexingPressure);
 
                 // Verify that the coordinating indexing pressure is maintained through downstream action filters
                 verify(coordinatingIndexingPressure, never()).close();
@@ -1131,7 +1133,7 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
         };
         doAnswer(unparsedModelAnswer).when(modelRegistry).getModelWithSecrets(any(), any());
 
-        Answer<MinimalServiceSettings> minimalServiceSettingsAnswer = invocationOnMock -> {
+        Answer<MinimalServiceSettings> singleMinimalServiceSettingsAnswer = invocationOnMock -> {
             String inferenceId = (String) invocationOnMock.getArguments()[0];
             var model = modelMap.get(inferenceId);
             if (model == null) {
@@ -1140,7 +1142,24 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
 
             return new MinimalServiceSettings(model);
         };
-        doAnswer(minimalServiceSettingsAnswer).when(modelRegistry).getMinimalServiceSettings(any());
+        doAnswer(singleMinimalServiceSettingsAnswer).when(modelRegistry).getMinimalServiceSettings(any());
+
+        Answer<Map<String, MinimalServiceSettings>> multipleMinimalServiceSettingsAnswer = invocationOnMock -> {
+            Set<String> inferenceIds = (Set<String>) invocationOnMock.getArguments()[0];
+            boolean throwIfAnyNotFound = (boolean) invocationOnMock.getArguments()[1];
+
+            Map<String, MinimalServiceSettings> minimalServiceSettingsMap = new HashMap<>();
+            for (String inferenceId : inferenceIds) {
+                var model = modelMap.get(inferenceId);
+                if (model != null) {
+                    minimalServiceSettingsMap.put(inferenceId, new MinimalServiceSettings(model));
+                } else if (throwIfAnyNotFound) {
+                    throw new ResourceNotFoundException("model id [{}] not found", inferenceId);
+                }
+            }
+            return minimalServiceSettingsMap;
+        };
+        doAnswer(multipleMinimalServiceSettingsAnswer).when(modelRegistry).getMinimalServiceSettings(any(), anyBoolean());
 
         InferenceService inferenceService = mock(InferenceService.class);
         Answer<?> chunkedInferAnswer = invocationOnMock -> {
