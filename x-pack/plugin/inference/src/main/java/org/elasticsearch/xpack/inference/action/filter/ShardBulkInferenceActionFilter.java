@@ -678,7 +678,6 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                         continue;
                     }
 
-                    var slot = ensureResponseAccumulatorSlot(itemIndex);
                     final List<Object> values;
                     try {
                         values = SemanticTextUtils.nodeObjectValues(field, valueObj);
@@ -688,69 +687,17 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                     }
 
                     List<FieldInferenceRequest> requests = itemRequests.computeIfAbsent(inferenceId, k -> new ArrayList<>());
-                    int offsetAdjustment = 0;
-                    int inputIndex = 0;
-                    for (Object v : values) {
-                        if (incrementIndexingPressurePreInference(indexRequest, itemIndex) == false) {
-                            break;
-                        }
-
-                        if (v instanceof String stringValue) {
-                            if (stringValue.isBlank()) {
-                                slot.addOrUpdateResponse(
-                                    new ChunkedStringFieldInferenceResponse(
-                                        field,
-                                        sourceField,
-                                        stringValue,
-                                        order,
-                                        0,
-                                        null,
-                                        EMPTY_CHUNKED_INFERENCE
-                                    )
-                                );
-                            } else {
-                                requests.add(
-                                    new ChunkedStringFieldInferenceRequest(
-                                        itemIndex,
-                                        field,
-                                        sourceField,
-                                        stringValue,
-                                        order,
-                                        offsetAdjustment,
-                                        chunkingSettings
-                                    )
-                                );
-                                inputLength += stringValue.length();
-                            }
-
-                            // When using the inference metadata fields format, all the text input values are concatenated so that the
-                            // chunk text offsets are expressed in the context of a single string. Calculate the offset adjustment
-                            // to apply to account for this.
-                            offsetAdjustment += stringValue.length() + 1; // Add one for separator char length
-                        } else if (v instanceof InferenceString inferenceString) {
-                            requests.add(
-                                new InferenceStringFieldInferenceRequest(itemIndex, field, sourceField, inferenceString, order, inputIndex)
-                            );
-                            inputLength += inferenceString.value().length();
-                        } else {
-                            setInferenceResponseFailure(
-                                itemIndex,
-                                new IllegalStateException(
-                                    "Unexpected parsed inference input type ["
-                                        + v.getClass().getName()
-                                        + "] for field ["
-                                        + field
-                                        + "] from source field ["
-                                        + sourceField
-                                        + "]"
-                                )
-                            );
-                            break;
-                        }
-
-                        order++;
-                        inputIndex++;
-                    }
+                    inputLength += addInferenceRequestsForSourceFieldValues(
+                        itemIndex,
+                        indexRequest,
+                        field,
+                        sourceField,
+                        chunkingSettings,
+                        order,
+                        values,
+                        requests
+                    );
+                    order += values.size();
                 }
             }
 
@@ -763,6 +710,87 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
             itemRequests.forEach(
                 (inferenceId, requests) -> requestsMap.computeIfAbsent(inferenceId, k -> new ArrayList<>()).addAll(requests)
             );
+            return inputLength;
+        }
+
+        private long addInferenceRequestsForSourceFieldValues(
+            int itemIndex,
+            ExtendedIndexRequest indexRequest,
+            String field,
+            String sourceField,
+            ChunkingSettings chunkingSettings,
+            int startOrder,
+            List<Object> values,
+            List<FieldInferenceRequest> requests
+        ) {
+            int order = startOrder;
+            int offsetAdjustment = 0;
+            int inputIndex = 0;
+            long inputLength = 0;
+            var slot = ensureResponseAccumulatorSlot(itemIndex);
+
+            for (Object v : values) {
+                if (incrementIndexingPressurePreInference(indexRequest, itemIndex) == false) {
+                    break;
+                }
+
+                if (v instanceof String stringValue) {
+                    if (stringValue.isBlank()) {
+                        slot.addOrUpdateResponse(
+                            new ChunkedStringFieldInferenceResponse(
+                                field,
+                                sourceField,
+                                stringValue,
+                                order,
+                                0,
+                                null,
+                                EMPTY_CHUNKED_INFERENCE
+                            )
+                        );
+                    } else {
+                        requests.add(
+                            new ChunkedStringFieldInferenceRequest(
+                                itemIndex,
+                                field,
+                                sourceField,
+                                stringValue,
+                                order,
+                                offsetAdjustment,
+                                chunkingSettings
+                            )
+                        );
+                        inputLength += stringValue.length();
+                    }
+
+                    // When using the inference metadata fields format, all the text input values are concatenated so that the
+                    // chunk text offsets are expressed in the context of a single string. Calculate the offset adjustment
+                    // to apply to account for this.
+                    offsetAdjustment += stringValue.length() + 1; // Add one for separator char length
+                } else if (v instanceof InferenceString inferenceString) {
+                    requests.add(
+                        new InferenceStringFieldInferenceRequest(itemIndex, field, sourceField, inferenceString, order, inputIndex)
+                    );
+                    inputLength += inferenceString.value().length();
+                } else {
+                    setInferenceResponseFailure(
+                        itemIndex,
+                        new IllegalStateException(
+                            "Unexpected parsed inference input type ["
+                                + v.getClass().getName()
+                                + "] for field ["
+                                + field
+                                + "] from source field ["
+                                + sourceField
+                                + "]"
+                        )
+                    );
+                    break;
+                }
+
+                order++;
+                inputIndex++;
+            }
+
             return inputLength;
         }
 
