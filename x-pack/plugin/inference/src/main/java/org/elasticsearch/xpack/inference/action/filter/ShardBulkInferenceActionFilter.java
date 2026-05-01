@@ -766,34 +766,6 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
             return inputLength;
         }
 
-        private static class ExtendedIndexRequest {
-            private final IndexRequest indexRequest;
-            private final boolean isUpdateRequest;
-            private boolean indexingPressureIncremented;
-
-            private ExtendedIndexRequest(IndexRequest indexRequest, boolean isUpdateRequest) {
-                this.indexRequest = indexRequest;
-                this.isUpdateRequest = isUpdateRequest;
-                this.indexingPressureIncremented = false;
-            }
-
-            private IndexRequest getIndexRequest() {
-                return indexRequest;
-            }
-
-            private boolean isUpdateRequest() {
-                return isUpdateRequest;
-            }
-
-            private boolean isIndexingPressureIncremented() {
-                return indexingPressureIncremented;
-            }
-
-            private void setIndexingPressureIncremented() {
-                this.indexingPressureIncremented = true;
-            }
-        }
-
         private boolean incrementIndexingPressurePreInference(ExtendedIndexRequest indexRequest, int itemIndex) {
             boolean success = true;
             if (indexRequest.isIndexingPressureIncremented() == false) {
@@ -995,6 +967,34 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
             return updateRequest.doc();
         } else {
             return null;
+        }
+    }
+
+    private static class ExtendedIndexRequest {
+        private final IndexRequest indexRequest;
+        private final boolean isUpdateRequest;
+        private boolean indexingPressureIncremented;
+
+        private ExtendedIndexRequest(IndexRequest indexRequest, boolean isUpdateRequest) {
+            this.indexRequest = indexRequest;
+            this.isUpdateRequest = isUpdateRequest;
+            this.indexingPressureIncremented = false;
+        }
+
+        private IndexRequest getIndexRequest() {
+            return indexRequest;
+        }
+
+        private boolean isUpdateRequest() {
+            return isUpdateRequest;
+        }
+
+        private boolean isIndexingPressureIncremented() {
+            return indexingPressureIncremented;
+        }
+
+        private void setIndexingPressureIncremented() {
+            this.indexingPressureIncremented = true;
         }
     }
 
