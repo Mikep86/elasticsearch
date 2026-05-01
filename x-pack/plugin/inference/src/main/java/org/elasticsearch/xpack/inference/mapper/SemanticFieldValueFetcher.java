@@ -128,11 +128,14 @@ class SemanticFieldValueFetcher implements ValueFetcher {
                 // TODO: Implement input index handling
                 throw new UnsupportedOperationException("Input index-based text extraction is not supported");
             }
-            var rawValue = originalValueMap.computeIfAbsent(offset.field(), k -> {
+
+            String rawValue = originalValueMap.get(offset.field());
+            if (rawValue == null) {
                 var valueObj = XContentMapValues.extractValue(offset.field(), source.source(), null);
                 var values = SemanticTextUtils.nodeStringValues(offset.field(), valueObj).stream().toList();
-                return Strings.collectionToDelimitedString(values, String.valueOf(MULTIVAL_SEP_CHAR));
-            });
+                rawValue = Strings.collectionToDelimitedString(values, String.valueOf(MULTIVAL_SEP_CHAR));
+                originalValueMap.put(offset.field(), rawValue);
+            }
 
             chunks.add(rawValue.substring(offset.start(), offset.end()));
         });
