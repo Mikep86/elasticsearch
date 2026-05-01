@@ -664,9 +664,9 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                     }
 
                     var slot = ensureResponseAccumulatorSlot(itemIndex);
-                    final List<String> values;
+                    final List<Object> values;
                     try {
-                        values = SemanticTextUtils.nodeStringValues(field, valueObj);
+                        values = SemanticTextUtils.nodeObjectValues(field, valueObj);
                     } catch (Exception exc) {
                         setInferenceResponseFailure(itemIndex, exc);
                         break;
@@ -674,34 +674,67 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
 
                     List<FieldInferenceRequest> requests = requestsMap.computeIfAbsent(inferenceId, k -> new ArrayList<>());
                     int offsetAdjustment = 0;
-                    for (String v : values) {
+                    for (Object v : values) {
                         if (incrementIndexingPressurePreInference(indexRequest, itemIndex) == false) {
                             return inputLength;
                         }
 
-                        if (v.isBlank()) {
-                            slot.addOrUpdateResponse(
-                                new ChunkedStringFieldInferenceResponse(field, sourceField, v, order++, 0, null, EMPTY_CHUNKED_INFERENCE)
-                            );
-                        } else {
+                        if (v instanceof String stringValue) {
+                            if (stringValue.isBlank()) {
+                                slot.addOrUpdateResponse(
+                                    new ChunkedStringFieldInferenceResponse(
+                                        field,
+                                        sourceField,
+                                        stringValue,
+                                        order++,
+                                        0,
+                                        null,
+                                        EMPTY_CHUNKED_INFERENCE
+                                    )
+                                );
+                            } else {
+                                requests.add(
+                                    new ChunkedStringFieldInferenceRequest(
+                                        itemIndex,
+                                        field,
+                                        sourceField,
+                                        stringValue,
+                                        order++,
+                                        offsetAdjustment,
+                                        chunkingSettings
+                                    )
+                                );
+                                inputLength += stringValue.length();
+                            }
+
+                            // When using the inference metadata fields format, all the text input values are concatenated so that the
+                            // chunk text offsets are expressed in the context of a single string. Calculate the offset adjustment
+                            // to apply to account for this.
+                            offsetAdjustment += stringValue.length() + 1; // Add one for separator char length
+                        } else if (v instanceof InferenceString inferenceString) {
+                            int inputOrder = order++;
                             requests.add(
-                                new ChunkedStringFieldInferenceRequest(
+                                new InferenceStringFieldInferenceRequest(
                                     itemIndex,
                                     field,
                                     sourceField,
-                                    v,
-                                    order++,
-                                    offsetAdjustment,
-                                    chunkingSettings
+                                    inferenceString,
+                                    inputOrder,
+                                    inputOrder
                                 )
                             );
-                            inputLength += v.length();
+                            inputLength += inferenceString.value().length();
+                        } else {
+                            throw new IllegalStateException(
+                                "Unexpected parsed inference input type ["
+                                    + v.getClass().getName()
+                                    + "] for field ["
+                                    + field
+                                    + "] from source field ["
+                                    + sourceField
+                                    + "]"
+                            );
                         }
-
-                        // When using the inference metadata fields format, all the input values are concatenated so that the
-                        // chunk text offsets are expressed in the context of a single string. Calculate the offset adjustment
-                        // to apply to account for this.
-                        offsetAdjustment += v.length() + 1; // Add one for separator char length
                     }
                 }
             }
