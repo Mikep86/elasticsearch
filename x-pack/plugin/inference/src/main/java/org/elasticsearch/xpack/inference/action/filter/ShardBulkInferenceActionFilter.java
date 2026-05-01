@@ -714,26 +714,23 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                             offsetAdjustment += stringValue.length() + 1; // Add one for separator char length
                         } else if (v instanceof InferenceString inferenceString) {
                             requests.add(
-                                new InferenceStringFieldInferenceRequest(
-                                    itemIndex,
-                                    field,
-                                    sourceField,
-                                    inferenceString,
-                                    order,
-                                    inputIndex
-                                )
+                                new InferenceStringFieldInferenceRequest(itemIndex, field, sourceField, inferenceString, order, inputIndex)
                             );
                             inputLength += inferenceString.value().length();
                         } else {
-                            throw new IllegalStateException(
-                                "Unexpected parsed inference input type ["
-                                    + v.getClass().getName()
-                                    + "] for field ["
-                                    + field
-                                    + "] from source field ["
-                                    + sourceField
-                                    + "]"
+                            setInferenceResponseFailure(
+                                itemIndex,
+                                new IllegalStateException(
+                                    "Unexpected parsed inference input type ["
+                                        + v.getClass().getName()
+                                        + "] for field ["
+                                        + field
+                                        + "] from source field ["
+                                        + sourceField
+                                        + "]"
+                                )
                             );
+                            break;
                         }
 
                         order++;
