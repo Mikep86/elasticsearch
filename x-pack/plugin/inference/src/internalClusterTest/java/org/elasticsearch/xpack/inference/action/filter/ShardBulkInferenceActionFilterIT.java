@@ -43,7 +43,6 @@ import org.elasticsearch.xpack.inference.InferenceSecretsIndex;
 import org.elasticsearch.xpack.inference.LocalStateInferencePlugin;
 import org.elasticsearch.xpack.inference.Utils;
 import org.elasticsearch.xpack.inference.mapper.SemanticInferenceMetadataFieldsMapperTests;
-import org.elasticsearch.xpack.inference.mock.TestDenseInferenceServiceExtension;
 import org.elasticsearch.xpack.inference.mock.TestSparseInferenceServiceExtension;
 import org.elasticsearch.xpack.inference.registry.ModelRegistry;
 import org.junit.Before;
@@ -66,6 +65,9 @@ import static org.hamcrest.Matchers.equalTo;
 @ESTestCase.WithoutEntitlements // due to dependency issue ES-12435
 public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
     public static final String INDEX_NAME = "test-index";
+
+    private static final String SPARSE_INFERENCE_ID = "sparse-endpoint";
+    private static final String DENSE_INFERENCE_ID = "dense-endpoint";
 
     private final boolean useLegacyFormat;
     private final boolean useSyntheticSource;
@@ -102,8 +104,8 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
             () -> randomFrom(DenseVectorFieldMapperTestUtils.getSupportedSimilarities(elementType))
         );
         int dimensions = DenseVectorFieldMapperTestUtils.randomCompatibleDimensions(elementType, 100);
-        Utils.storeSparseModel("sparse-endpoint", modelRegistry);
-        Utils.storeDenseModel("dense-endpoint", modelRegistry, dimensions, similarity, elementType);
+        Utils.storeSparseModel(SPARSE_INFERENCE_ID, modelRegistry);
+        Utils.storeDenseModel(DENSE_INFERENCE_ID, modelRegistry, dimensions, similarity, elementType);
     }
 
     @Override
@@ -175,7 +177,7 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
                     }
                 }
             }
-            """, "sparse-endpoint", "dense-endpoint")).get();
+            """, SPARSE_INFERENCE_ID, DENSE_INFERENCE_ID)).get();
         assertRandomBulkOperations(INDEX_NAME, isIndexRequest -> {
             Map<String, Object> map = new HashMap<>();
             map.put("sparse_field", isIndexRequest && rarely() ? null : randomSemanticTextInput());
@@ -185,27 +187,20 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
     }
 
     public void testItemFailures() {
-        prepareCreate(INDEX_NAME).setMapping(
-            String.format(
-                Locale.ROOT,
-                """
-                    {
-                        "properties": {
-                            "sparse_field": {
-                                "type": "semantic_text",
-                                "inference_id": "%s"
-                            },
-                            "dense_field": {
-                                "type": "semantic_text",
-                                "inference_id": "%s"
-                            }
-                        }
+        prepareCreate(INDEX_NAME).setMapping(String.format(Locale.ROOT, """
+            {
+                "properties": {
+                    "sparse_field": {
+                        "type": "semantic_text",
+                        "inference_id": "%s"
+                    },
+                    "dense_field": {
+                        "type": "semantic_text",
+                        "inference_id": "%s"
                     }
-                    """,
-                TestSparseInferenceServiceExtension.TestInferenceService.NAME,
-                TestDenseInferenceServiceExtension.TestInferenceService.NAME
-            )
-        ).get();
+                }
+            }
+            """, SPARSE_INFERENCE_ID, DENSE_INFERENCE_ID)).get();
 
         BulkRequestBuilder bulkReqBuilder = client().prepareBulk();
         int totalBulkSize = randomIntBetween(100, 200);  // Use a bulk request size large enough to require batching
