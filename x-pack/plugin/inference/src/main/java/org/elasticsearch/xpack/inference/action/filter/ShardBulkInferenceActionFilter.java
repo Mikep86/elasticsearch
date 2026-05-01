@@ -674,6 +674,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
 
                     List<FieldInferenceRequest> requests = requestsMap.computeIfAbsent(inferenceId, k -> new ArrayList<>());
                     int offsetAdjustment = 0;
+                    int inputIndex = 0;
                     for (Object v : values) {
                         if (incrementIndexingPressurePreInference(indexRequest, itemIndex) == false) {
                             return inputLength;
@@ -686,7 +687,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                                         field,
                                         sourceField,
                                         stringValue,
-                                        order++,
+                                        order,
                                         0,
                                         null,
                                         EMPTY_CHUNKED_INFERENCE
@@ -699,7 +700,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                                         field,
                                         sourceField,
                                         stringValue,
-                                        order++,
+                                        order,
                                         offsetAdjustment,
                                         chunkingSettings
                                     )
@@ -712,15 +713,14 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                             // to apply to account for this.
                             offsetAdjustment += stringValue.length() + 1; // Add one for separator char length
                         } else if (v instanceof InferenceString inferenceString) {
-                            int inputOrder = order++;
                             requests.add(
                                 new InferenceStringFieldInferenceRequest(
                                     itemIndex,
                                     field,
                                     sourceField,
                                     inferenceString,
-                                    inputOrder,
-                                    inputOrder
+                                    order,
+                                    inputIndex
                                 )
                             );
                             inputLength += inferenceString.value().length();
@@ -735,6 +735,9 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                                     + "]"
                             );
                         }
+
+                        order++;
+                        inputIndex++;
                     }
                 }
             }

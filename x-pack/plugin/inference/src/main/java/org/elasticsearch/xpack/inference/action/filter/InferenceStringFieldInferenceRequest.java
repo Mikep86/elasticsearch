@@ -17,7 +17,7 @@ import java.util.Objects;
 final class InferenceStringFieldInferenceRequest extends FieldInferenceRequest {
     /** The input to run inference on. */
     private final InferenceString input;
-    /** The position of this input within its source. */
+    /** The position of this input within its source field. */
     private final int inputIndex;
 
     InferenceStringFieldInferenceRequest(

@@ -23,7 +23,7 @@ abstract class FieldInferenceRequest {
     private final String field;
     /** The source field. */
     private final String sourceField;
-    /** The original order of the input. */
+    /** The original order of the input across all source fields. */
     private final int inputOrder;
 
     protected FieldInferenceRequest(int bulkItemIndex, String field, String sourceField, int inputOrder) {
