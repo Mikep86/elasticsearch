@@ -578,12 +578,10 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
          * @return The total content length of all newly added requests, or {@code 0} if no requests were added.
          */
         private long addFieldInferenceRequests(BulkItemRequest item, int itemIndex, Map<String, List<FieldInferenceRequest>> requestsMap) {
-            boolean isUpdateRequest = false;
-            final IndexRequestWithIndexingPressure indexRequest;
+            final ExtendedIndexRequest indexRequest;
             if (item.request() instanceof IndexRequest ir) {
-                indexRequest = new IndexRequestWithIndexingPressure(ir);
+                indexRequest = new ExtendedIndexRequest(ir, false);
             } else if (item.request() instanceof UpdateRequest updateRequest) {
-                isUpdateRequest = true;
                 if (updateRequest.script() != null) {
                     setInferenceResponseFailure(
                         itemIndex,
@@ -595,15 +593,28 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                     );
                     return 0;
                 }
-                indexRequest = new IndexRequestWithIndexingPressure(updateRequest.doc());
+                indexRequest = new ExtendedIndexRequest(updateRequest.doc(), true);
             } else {
                 // ignore delete request
                 return 0;
             }
 
+            return addFieldInferenceRequests(indexRequest, itemIndex, requestsMap);
+        }
+
+        private long addFieldInferenceRequests(
+            ExtendedIndexRequest indexRequest,
+            int itemIndex,
+            Map<String, List<FieldInferenceRequest>> requestsMap
+        ) {
             final Map<String, Object> docMap = indexRequest.getIndexRequest().sourceAsMap();
+            final Map<String, List<FieldInferenceRequest>> itemRequests = new HashMap<>();
             long inputLength = 0;
             for (var entry : fieldInferenceMap.values()) {
+                if (hasInferenceResponseFailure(itemIndex)) {
+                    break;
+                }
+
                 String field = entry.getName();
                 String inferenceId = entry.getInferenceId();
                 ChunkingSettings chunkingSettings = ChunkingSettingsBuilder.fromMap(entry.getChunkingSettings(), false);
@@ -628,8 +639,12 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
 
                 int order = 0;
                 for (var sourceField : entry.getSourceFields()) {
+                    if (hasInferenceResponseFailure(itemIndex)) {
+                        break;
+                    }
+
                     var valueObj = XContentMapValues.extractValue(sourceField, docMap, EXPLICIT_NULL);
-                    if (useLegacyFormat == false && isUpdateRequest && valueObj == EXPLICIT_NULL) {
+                    if (useLegacyFormat == false && indexRequest.isUpdateRequest() && valueObj == EXPLICIT_NULL) {
                         /**
                          * It's an update request, and the source field is explicitly set to null,
                          * so we need to propagate this information to the inference fields metadata
@@ -638,7 +653,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                          * preventing any unintended carryover of prior inference results.
                          */
                         if (incrementIndexingPressurePreInference(indexRequest, itemIndex) == false) {
-                            return inputLength;
+                            break;
                         }
 
                         var slot = ensureResponseAccumulatorSlot(itemIndex);
@@ -648,7 +663,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                         continue;
                     }
                     if (valueObj == null || valueObj == EXPLICIT_NULL) {
-                        if (isUpdateRequest && useLegacyFormat) {
+                        if (indexRequest.isUpdateRequest() && useLegacyFormat) {
                             setInferenceResponseFailure(
                                 itemIndex,
                                 new ElasticsearchStatusException(
@@ -672,12 +687,12 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                         break;
                     }
 
-                    List<FieldInferenceRequest> requests = requestsMap.computeIfAbsent(inferenceId, k -> new ArrayList<>());
+                    List<FieldInferenceRequest> requests = itemRequests.computeIfAbsent(inferenceId, k -> new ArrayList<>());
                     int offsetAdjustment = 0;
                     int inputIndex = 0;
                     for (Object v : values) {
                         if (incrementIndexingPressurePreInference(indexRequest, itemIndex) == false) {
-                            return inputLength;
+                            break;
                         }
 
                         if (v instanceof String stringValue) {
@@ -739,20 +754,35 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                 }
             }
 
+            if (hasInferenceResponseFailure(itemIndex)) {
+                // Discard the staged requests. applyInferenceResponses will abort this item, so any inference work would be wasted.
+                return 0;
+            }
+
+            // Merge the item's staged requests into the requests map
+            itemRequests.forEach(
+                (inferenceId, requests) -> requestsMap.computeIfAbsent(inferenceId, k -> new ArrayList<>()).addAll(requests)
+            );
             return inputLength;
         }
 
-        private static class IndexRequestWithIndexingPressure {
+        private static class ExtendedIndexRequest {
             private final IndexRequest indexRequest;
+            private final boolean isUpdateRequest;
             private boolean indexingPressureIncremented;
 
-            private IndexRequestWithIndexingPressure(IndexRequest indexRequest) {
+            private ExtendedIndexRequest(IndexRequest indexRequest, boolean isUpdateRequest) {
                 this.indexRequest = indexRequest;
+                this.isUpdateRequest = isUpdateRequest;
                 this.indexingPressureIncremented = false;
             }
 
             private IndexRequest getIndexRequest() {
                 return indexRequest;
+            }
+
+            private boolean isUpdateRequest() {
+                return isUpdateRequest;
             }
 
             private boolean isIndexingPressureIncremented() {
@@ -764,7 +794,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
             }
         }
 
-        private boolean incrementIndexingPressurePreInference(IndexRequestWithIndexingPressure indexRequest, int itemIndex) {
+        private boolean incrementIndexingPressurePreInference(ExtendedIndexRequest indexRequest, int itemIndex) {
             boolean success = true;
             if (indexRequest.isIndexingPressureIncremented() == false) {
                 try {
@@ -800,6 +830,11 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
         private void setInferenceResponseFailure(int id, Exception failure) {
             var acc = ensureResponseAccumulatorSlot(id);
             acc.setFailure(failure);
+        }
+
+        private boolean hasInferenceResponseFailure(int itemIndex) {
+            var acc = inferenceResults.get(itemIndex);
+            return acc != null && acc.failure().get() != null;
         }
 
         /**
