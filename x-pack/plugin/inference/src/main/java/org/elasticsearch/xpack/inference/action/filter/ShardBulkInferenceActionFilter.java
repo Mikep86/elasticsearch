@@ -50,6 +50,7 @@ import org.elasticsearch.inference.InferenceStringGroup;
 import org.elasticsearch.inference.InputType;
 import org.elasticsearch.inference.MinimalServiceSettings;
 import org.elasticsearch.inference.Model;
+import org.elasticsearch.inference.TaskType;
 import org.elasticsearch.inference.UnparsedModel;
 import org.elasticsearch.inference.telemetry.InferenceStats;
 import org.elasticsearch.license.XPackLicenseState;
@@ -81,6 +82,7 @@ import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Collectors;
 
@@ -638,6 +640,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                 }
 
                 int order = 0;
+                MinimalServiceSettings serviceSettings = null;
                 for (var sourceField : entry.getSourceFields()) {
                     if (hasInferenceResponseFailure(itemIndex)) {
                         break;
@@ -678,9 +681,23 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                         continue;
                     }
 
-                    final List<Object> values;
+                    if (serviceSettings == null) {
+                        var serviceSettingsMap = modelRegistry.getMinimalServiceSettings(Set.of(inferenceId), false);
+                        if (serviceSettingsMap.isEmpty()) {
+                            setInferenceResponseFailure(
+                                itemIndex,
+                                new ResourceNotFoundException("Inference id [{}] not found for field [{}]", inferenceId, field)
+                            );
+                            break;
+                        }
+                        serviceSettings = serviceSettingsMap.get(inferenceId);
+                    }
+
+                    final List<?> values;
                     try {
-                        values = SemanticTextUtils.nodeObjectValues(field, valueObj);
+                        values = serviceSettings.taskType() == TaskType.EMBEDDING
+                            ? SemanticTextUtils.nodeObjectValues(field, valueObj)
+                            : SemanticTextUtils.nodeStringValues(field, valueObj);
                     } catch (Exception exc) {
                         setInferenceResponseFailure(itemIndex, exc);
                         break;
@@ -720,7 +737,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
             String sourceField,
             ChunkingSettings chunkingSettings,
             int startOrder,
-            List<Object> values,
+            List<?> values,
             List<FieldInferenceRequest> requests
         ) {
             int order = startOrder;
