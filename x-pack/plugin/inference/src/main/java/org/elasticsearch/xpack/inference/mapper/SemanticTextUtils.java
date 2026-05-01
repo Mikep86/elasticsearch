@@ -8,7 +8,6 @@
 package org.elasticsearch.xpack.inference.mapper;
 
 import org.elasticsearch.ElasticsearchStatusException;
-import org.elasticsearch.core.CheckedFunction;
 import org.elasticsearch.inference.InferenceString;
 import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.xcontent.DeprecationHandler;
@@ -17,11 +16,11 @@ import org.elasticsearch.xcontent.XContentParser;
 import org.elasticsearch.xcontent.XContentType;
 import org.elasticsearch.xcontent.support.MapXContentParser;
 
-import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 
 public class SemanticTextUtils {
     private static final String STRING_EXPECTED_TYPES = "String|Number|Boolean";
@@ -46,10 +45,9 @@ public class SemanticTextUtils {
      * @param valueObj the raw source field value
      * @return a flat list of inference inputs
      * @throws ElasticsearchStatusException if the raw source field value uses an invalid format
-     * @throws IOException if {@link InferenceString} parsing fails
      */
     @SuppressWarnings("unchecked")
-    public static List<Object> nodeObjectValues(String field, Object valueObj) throws IOException {
+    public static List<Object> nodeObjectValues(String field, Object valueObj) {
         return (List<Object>) nodeObjectValues(field, valueObj, true);
     }
 
@@ -64,15 +62,14 @@ public class SemanticTextUtils {
      * @param valueObj the raw source field value
      * @return a list of string inference inputs
      * @throws ElasticsearchStatusException if the raw source field value uses an invalid format
-     * @throws IOException if {@link InferenceString} parsing fails
      */
     @SuppressWarnings("unchecked")
-    public static List<String> nodeStringValues(String field, Object valueObj) throws IOException {
+    public static List<String> nodeStringValues(String field, Object valueObj) {
         return (List<String>) nodeObjectValues(field, valueObj, false);
     }
 
-    private static List<?> nodeObjectValues(String field, Object valueObj, boolean parseInferenceStrings) throws IOException {
-        final CheckedFunction<Object, Object, IOException> parseRawValue = raw -> {
+    private static List<?> nodeObjectValues(String field, Object valueObj, boolean parseInferenceStrings) {
+        final Function<Object, Object> parseRawValue = raw -> {
             Object parsed = nodeObjectValue(field, raw, parseInferenceStrings);
             assert parseInferenceStrings || parsed instanceof String : "All values for field [" + field + "] must be strings";
             return parsed;
@@ -91,7 +88,7 @@ public class SemanticTextUtils {
         return parsedValues;
     }
 
-    private static Object nodeObjectValue(String field, Object valueObj, boolean parseInferenceStrings) throws IOException {
+    private static Object nodeObjectValue(String field, Object valueObj, boolean parseInferenceStrings) {
         if (valueObj instanceof Number || valueObj instanceof Boolean) {
             return valueObj.toString();
         } else if (valueObj instanceof String value) {
@@ -99,7 +96,7 @@ public class SemanticTextUtils {
         } else if (parseInferenceStrings && valueObj instanceof Map<?, ?> map) {
             @SuppressWarnings("unchecked")
             Map<String, Object> stringKeyedMap = (Map<String, Object>) map;
-            return parseInferenceStringValue(stringKeyedMap);
+            return parseInferenceStringValue(field, stringKeyedMap);
         } else {
             throw new ElasticsearchStatusException(
                 "Invalid format for field [{}], expected [{}] got [{}]",
@@ -111,8 +108,7 @@ public class SemanticTextUtils {
         }
     }
 
-    private static InferenceString parseInferenceStringValue(Map<String, Object> value) throws IOException {
-        // TODO: Throw more descriptive exception if inference string is invalid?
+    private static InferenceString parseInferenceStringValue(String field, Map<String, Object> value) {
         try (
             XContentParser parser = new MapXContentParser(
                 NamedXContentRegistry.EMPTY,
@@ -122,6 +118,8 @@ public class SemanticTextUtils {
             )
         ) {
             return InferenceString.PARSER.parse(parser, null);
+        } catch (Exception e) {
+            throw new ElasticsearchStatusException("Invalid object value format for field [{}]", RestStatus.BAD_REQUEST, e, field);
         }
     }
 }
