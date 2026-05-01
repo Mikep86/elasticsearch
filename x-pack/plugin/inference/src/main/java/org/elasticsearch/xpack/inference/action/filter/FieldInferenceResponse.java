@@ -24,15 +24,15 @@ abstract class FieldInferenceResponse {
     private final String field;
     /** The source field that the input was extracted from. */
     private final String sourceField;
-    /** The original order of the input. */
-    private final int inputOrder;
+    /** The original order of the input across all source fields. */
+    private final int fieldInputOrder;
     /** The model used to run inference, or {@code null} for cleared/empty responses. */
     private final Model model;
 
-    protected FieldInferenceResponse(String field, String sourceField, int inputOrder, @Nullable Model model) {
+    protected FieldInferenceResponse(String field, String sourceField, int fieldInputOrder, @Nullable Model model) {
         this.field = field;
         this.sourceField = sourceField;
-        this.inputOrder = inputOrder;
+        this.fieldInputOrder = fieldInputOrder;
         this.model = model;
     }
 
@@ -44,8 +44,8 @@ abstract class FieldInferenceResponse {
         return sourceField;
     }
 
-    public int inputOrder() {
-        return inputOrder;
+    public int fieldInputOrder() {
+        return fieldInputOrder;
     }
 
     @Nullable
@@ -58,7 +58,7 @@ abstract class FieldInferenceResponse {
         if (this == o) return true;
         if (o == null || getClass() != o.getClass()) return false;
         FieldInferenceResponse that = (FieldInferenceResponse) o;
-        return inputOrder == that.inputOrder
+        return fieldInputOrder == that.fieldInputOrder
             && Objects.equals(field, that.field)
             && Objects.equals(sourceField, that.sourceField)
             && Objects.equals(model, that.model);
@@ -66,6 +66,6 @@ abstract class FieldInferenceResponse {
 
     @Override
     public int hashCode() {
-        return Objects.hash(field, sourceField, inputOrder, model);
+        return Objects.hash(field, sourceField, fieldInputOrder, model);
     }
 }

@@ -416,7 +416,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                                     request.field(),
                                     request.sourceField(),
                                     useLegacyFormat ? request.input() : null,
-                                    request.inputOrder(),
+                                    request.fieldInputOrder(),
                                     request.offsetAdjustment(),
                                     inferenceProvider.model,
                                     result
@@ -515,8 +515,8 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                                 new InferenceStringFieldInferenceResponse(
                                     request.field(),
                                     request.sourceField(),
-                                    request.inputOrder(),
-                                    request.inputIndex(),
+                                    request.fieldInputOrder(),
+                                    request.sourceFieldInputIndex(),
                                     inferenceProvider.model,
                                     embedding
                                 )
@@ -862,7 +862,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                 }
 
                 // ensure that the order in the original field is consistent in case of multiple inputs
-                Collections.sort(responses, Comparator.comparingInt(FieldInferenceResponse::inputOrder));
+                Collections.sort(responses, Comparator.comparingInt(FieldInferenceResponse::fieldInputOrder));
                 Map<String, List<SemanticTextField.Chunk>> chunkMap = new LinkedHashMap<>();
                 for (var resp : responses) {
                     // Get the first non-null model from the response list
@@ -884,7 +884,7 @@ public class ShardBulkInferenceActionFilter implements MappedActionFilter {
                                     "Legacy semantic text format does not support non-text inputs for field [" + fieldName + "]"
                                 );
                             }
-                            lst.add(toSemanticFieldChunk(e.inputIndex(), e.inferenceResults(), indexRequest.getContentType()));
+                            lst.add(toSemanticFieldChunk(e.sourceFieldInputIndex(), e.inferenceResults(), indexRequest.getContentType()));
                         }
                         default -> throw new IllegalStateException(
                             "Unexpected field inference response type [" + resp.getClass().getName() + "] for field [" + fieldName + "]"

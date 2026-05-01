@@ -17,39 +17,39 @@ import java.util.Objects;
 final class InferenceStringFieldInferenceRequest extends FieldInferenceRequest {
     /** The input to run inference on. */
     private final InferenceString input;
-    /** The position of this input within its source field. */
-    private final int inputIndex;
+    /** The position of the input within its source field. */
+    private final int sourceFieldInputIndex;
 
     InferenceStringFieldInferenceRequest(
         int bulkItemIndex,
         String field,
         String sourceField,
         InferenceString input,
-        int inputOrder,
-        int inputIndex
+        int fieldInputOrder,
+        int sourceFieldInputIndex
     ) {
-        super(bulkItemIndex, field, sourceField, inputOrder);
+        super(bulkItemIndex, field, sourceField, fieldInputOrder);
         this.input = input;
-        this.inputIndex = inputIndex;
+        this.sourceFieldInputIndex = sourceFieldInputIndex;
     }
 
     public InferenceString input() {
         return input;
     }
 
-    public int inputIndex() {
-        return inputIndex;
+    public int sourceFieldInputIndex() {
+        return sourceFieldInputIndex;
     }
 
     @Override
     public boolean equals(Object o) {
         if (super.equals(o) == false) return false;
         InferenceStringFieldInferenceRequest that = (InferenceStringFieldInferenceRequest) o;
-        return inputIndex == that.inputIndex && Objects.equals(input, that.input);
+        return sourceFieldInputIndex == that.sourceFieldInputIndex && Objects.equals(input, that.input);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(super.hashCode(), input, inputIndex);
+        return Objects.hash(super.hashCode(), input, sourceFieldInputIndex);
     }
 }

@@ -18,26 +18,26 @@ import java.util.Objects;
  * A {@link FieldInferenceResponse} for inference results produced from a single typed {@link InferenceString} input.
  */
 final class InferenceStringFieldInferenceResponse extends FieldInferenceResponse {
-    /** The position of the input within its source. */
-    private final int inputIndex;
+    /** The position of the input within its source field. */
+    private final int sourceFieldInputIndex;
     /** the inference results. */
     private final EmbeddingResults.Embedding<?> inferenceResults;
 
     InferenceStringFieldInferenceResponse(
         String field,
         String sourceField,
-        int inputOrder,
-        int inputIndex,
+        int fieldInputOrder,
+        int sourceFieldInputIndex,
         @Nullable Model model,
         EmbeddingResults.Embedding<?> inferenceResults
     ) {
-        super(field, sourceField, inputOrder, model);
-        this.inputIndex = inputIndex;
+        super(field, sourceField, fieldInputOrder, model);
+        this.sourceFieldInputIndex = sourceFieldInputIndex;
         this.inferenceResults = inferenceResults;
     }
 
-    public int inputIndex() {
-        return inputIndex;
+    public int sourceFieldInputIndex() {
+        return sourceFieldInputIndex;
     }
 
     public EmbeddingResults.Embedding<?> inferenceResults() {
@@ -48,11 +48,11 @@ final class InferenceStringFieldInferenceResponse extends FieldInferenceResponse
     public boolean equals(Object o) {
         if (super.equals(o) == false) return false;
         InferenceStringFieldInferenceResponse that = (InferenceStringFieldInferenceResponse) o;
-        return inputIndex == that.inputIndex && Objects.equals(inferenceResults, that.inferenceResults);
+        return sourceFieldInputIndex == that.sourceFieldInputIndex && Objects.equals(inferenceResults, that.inferenceResults);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(super.hashCode(), inputIndex, inferenceResults);
+        return Objects.hash(super.hashCode(), sourceFieldInputIndex, inferenceResults);
     }
 }

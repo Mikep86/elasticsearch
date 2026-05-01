@@ -24,13 +24,13 @@ abstract class FieldInferenceRequest {
     /** The source field. */
     private final String sourceField;
     /** The original order of the input across all source fields. */
-    private final int inputOrder;
+    private final int fieldInputOrder;
 
-    protected FieldInferenceRequest(int bulkItemIndex, String field, String sourceField, int inputOrder) {
+    protected FieldInferenceRequest(int bulkItemIndex, String field, String sourceField, int fieldInputOrder) {
         this.bulkItemIndex = bulkItemIndex;
         this.field = field;
         this.sourceField = sourceField;
-        this.inputOrder = inputOrder;
+        this.fieldInputOrder = fieldInputOrder;
     }
 
     public int bulkItemIndex() {
@@ -45,8 +45,8 @@ abstract class FieldInferenceRequest {
         return sourceField;
     }
 
-    public int inputOrder() {
-        return inputOrder;
+    public int fieldInputOrder() {
+        return fieldInputOrder;
     }
 
     @Override
@@ -55,13 +55,13 @@ abstract class FieldInferenceRequest {
         if (o == null || getClass() != o.getClass()) return false;
         FieldInferenceRequest that = (FieldInferenceRequest) o;
         return bulkItemIndex == that.bulkItemIndex
-            && inputOrder == that.inputOrder
+            && fieldInputOrder == that.fieldInputOrder
             && Objects.equals(field, that.field)
             && Objects.equals(sourceField, that.sourceField);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(bulkItemIndex, field, sourceField, inputOrder);
+        return Objects.hash(bulkItemIndex, field, sourceField, fieldInputOrder);
     }
 }

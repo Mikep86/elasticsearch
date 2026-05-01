@@ -28,12 +28,12 @@ final class ChunkedStringFieldInferenceResponse extends FieldInferenceResponse {
         String field,
         String sourceField,
         @Nullable String input,
-        int inputOrder,
+        int fieldInputOrder,
         int offsetAdjustment,
         @Nullable Model model,
         ChunkedInference chunkedResults
     ) {
-        super(field, sourceField, inputOrder, model);
+        super(field, sourceField, fieldInputOrder, model);
         this.input = input;
         this.offsetAdjustment = offsetAdjustment;
         this.chunkedResults = chunkedResults;

@@ -28,11 +28,11 @@ final class ChunkedStringFieldInferenceRequest extends FieldInferenceRequest {
         String field,
         String sourceField,
         String input,
-        int inputOrder,
+        int fieldInputOrder,
         int offsetAdjustment,
         @Nullable ChunkingSettings chunkingSettings
     ) {
-        super(bulkItemIndex, field, sourceField, inputOrder);
+        super(bulkItemIndex, field, sourceField, fieldInputOrder);
         this.input = input;
         this.offsetAdjustment = offsetAdjustment;
         this.chunkingSettings = chunkingSettings;
