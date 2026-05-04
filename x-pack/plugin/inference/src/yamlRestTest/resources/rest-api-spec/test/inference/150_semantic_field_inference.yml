@@ -1,0 +1,141 @@
+setup:
+  - requires:
+      cluster_features: "semantic_field.semantic_field_mapper"
+      reason: "semantic field needs to be available"
+
+  - do:
+      inference.put:
+        task_type: embedding
+        inference_id: embedding-inference-id
+        body: >
+          {
+            "service": "text_embedding_test_service",
+            "service_settings": {
+              "model": "my_model",
+              "dimensions": 4,
+              "similarity": "cosine",
+              "api_key": "abc64"
+            },
+            "task_settings": {
+            }
+          }
+
+  - do:
+      indices.create:
+        index: test-semantic-field-index
+        body:
+          mappings:
+            properties:
+              semantic_field:
+                type: semantic
+                inference_id: embedding-inference-id
+
+---
+"Indexing a single base64-encoded image produces an input_index-form chunk":
+  - do:
+      index:
+        index: test-semantic-field-index
+        id: doc_1
+        body:
+          semantic_field:
+            type: image
+            value: "data:image/jpeg;base64,Y2F0IG9uIGEgd2luZG93c2lsbA=="
+        refresh: true
+
+  - do:
+      search:
+        index: test-semantic-field-index
+        body:
+          query:
+            match_all: { }
+          _source:
+            exclude_vectors: false
+
+  - match: { hits.total.value: 1 }
+  - match: { hits.hits.0._id: doc_1 }
+  - match: { hits.hits.0._source._inference_fields.semantic_field.inference.inference_id: embedding-inference-id }
+  - match: { hits.hits.0._source._inference_fields.semantic_field.inference.model_settings.task_type: embedding }
+  - match: { hits.hits.0._source._inference_fields.semantic_field.inference.model_settings.dimensions: 4 }
+
+  - length: { hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field: 1 }
+  - match:      { hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.0.input_index: 0 }
+  - exists:     hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.0.embeddings
+  - not_exists: hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.0.start_offset
+  - not_exists: hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.0.end_offset
+
+---
+"Indexing multiple base64-encoded images produces input_index-form chunks for each":
+  - do:
+      index:
+        index: test-semantic-field-index
+        id: doc_1
+        body:
+          semantic_field:
+            - type: image
+              value: "data:image/jpeg;base64,Y2F0IG9uIGEgd2luZG93c2lsbA=="
+            - type: image
+              value: "data:image/jpeg;base64,ZG9nIHJ1bm5pbmcgaW4gYSBwYXJr"
+        refresh: true
+
+  - do:
+      search:
+        index: test-semantic-field-index
+        body:
+          query:
+            match_all: { }
+          _source:
+            exclude_vectors: false
+
+  - match: { hits.total.value: 1 }
+
+  - length: { hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field: 2 }
+
+  # Chunk 0: first image -> input_index form
+  - match:      { hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.0.input_index: 0 }
+  - exists:     hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.0.embeddings
+  - not_exists: hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.0.start_offset
+  - not_exists: hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.0.end_offset
+
+  # Chunk 1: second image -> input_index form
+  - match:      { hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.1.input_index: 1 }
+  - exists:     hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.1.embeddings
+  - not_exists: hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.1.start_offset
+  - not_exists: hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.1.end_offset
+
+---
+"Indexing a mix of text and base64-encoded image values produces both chunk forms":
+  - do:
+      index:
+        index: test-semantic-field-index
+        id: doc_1
+        body:
+          semantic_field:
+            - "the quick brown fox"
+            - type: image
+              value: "data:image/jpeg;base64,Y2F0IG9uIGEgd2luZG93c2lsbA=="
+        refresh: true
+
+  - do:
+      search:
+        index: test-semantic-field-index
+        body:
+          query:
+            match_all: { }
+          _source:
+            exclude_vectors: false
+
+  - match: { hits.total.value: 1 }
+
+  - length: { hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field: 2 }
+
+  # Chunk 0: text input -> start_offset / end_offset form
+  - match:      { hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.0.start_offset: 0 }
+  - match:      { hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.0.end_offset: 19 }
+  - exists:     hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.0.embeddings
+  - not_exists: hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.0.input_index
+
+  # Chunk 1: image input -> input_index form
+  - match:      { hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.1.input_index: 1 }
+  - exists:     hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.1.embeddings
+  - not_exists: hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.1.start_offset
+  - not_exists: hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.1.end_offset
