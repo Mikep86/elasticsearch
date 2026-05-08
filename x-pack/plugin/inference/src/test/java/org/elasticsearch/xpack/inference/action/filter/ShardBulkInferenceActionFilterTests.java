@@ -104,8 +104,8 @@ import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.getOrig
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldMapperTests.addSemanticTextInferenceResults;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomChunkedInferenceEmbedding;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomMultimodalEmbedding;
+import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomSemanticInput;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomSemanticText;
-import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomSemanticTextInput;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.semanticTextFieldFromChunkedInferenceResults;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.toChunkedResult;
 import static org.hamcrest.Matchers.containsString;
@@ -1247,10 +1247,13 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
         for (var entry : fieldInferenceMap.values()) {
             String field = entry.getName();
             var model = modelMap.get(entry.getInferenceId());
-            Object inputObject = randomSemanticTextInput();
-            String inputText = inputObject.toString();
+
+            Object inputObject = randomSemanticInput(
+                useLegacyFormat == false && model != null && model.getTaskType() == TaskType.EMBEDDING
+            );
             docMap.put(field, inputObject);
-            expectedDocMap.put(field, useLegacyFormat ? inputText : inputObject);
+            expectedDocMap.put(field, inputObject);
+
             if (model == null) {
                 // ignore results, the doc should fail with a resource not found exception
                 continue;

@@ -16,7 +16,9 @@ import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapperTestUtils;
 import org.elasticsearch.inference.ChunkedInference;
 import org.elasticsearch.inference.ChunkingSettings;
+import org.elasticsearch.inference.DataType;
 import org.elasticsearch.inference.EndpointMetadataTests;
+import org.elasticsearch.inference.InferenceString;
 import org.elasticsearch.inference.MinimalServiceSettings;
 import org.elasticsearch.inference.Model;
 import org.elasticsearch.inference.SimilarityMeasure;
@@ -462,10 +464,11 @@ public class SemanticTextFieldTests extends AbstractXContentTestCase<SemanticTex
         return randomValueOtherThan(chunkingSettings, () -> generateRandomChunkingSettings(false));
     }
 
-    /**
-     * Returns a randomly generated object for Semantic Text tests purpose.
-     */
     public static Object randomSemanticTextInput() {
+        return randomSemanticInput(false);
+    }
+
+    public static Object randomSemanticInput(boolean allowInferenceStrings) {
         if (rarely()) {
             return switch (randomIntBetween(0, 4)) {
                 case 0 -> randomInt();
@@ -473,9 +476,15 @@ public class SemanticTextFieldTests extends AbstractXContentTestCase<SemanticTex
                 case 2 -> randomFloat();
                 case 3 -> randomBoolean();
                 case 4 -> randomDouble();
-                default -> throw new IllegalStateException("Illegal state while generating random semantic text input");
+                default -> throw new AssertionError("Unexpected state");
             };
         } else {
+            if (allowInferenceStrings && randomBoolean()) {
+                return new InferenceString(
+                    randomValueOtherThan(DataType.TEXT, () -> randomFrom(DataType.values())),
+                    "data:image/jpeg;base64," + randomAlphaOfLength(10)
+                );
+            }
             return randomAlphaOfLengthBetween(10, 20);
         }
     }
@@ -503,7 +512,7 @@ public class SemanticTextFieldTests extends AbstractXContentTestCase<SemanticTex
                 }
                 return new ChunkedInferenceEmbedding(chunks);
             }
-            case TEXT_EMBEDDING -> {
+            case TEXT_EMBEDDING, EMBEDDING -> {
                 var elementType = field.inference().modelSettings().elementType();
                 int embeddingLength = DenseVectorFieldMapperTestUtils.getEmbeddingLength(
                     elementType,
