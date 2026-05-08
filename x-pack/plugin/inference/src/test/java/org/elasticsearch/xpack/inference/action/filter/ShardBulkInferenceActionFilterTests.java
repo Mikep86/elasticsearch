@@ -1358,7 +1358,7 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
         }
 
         public static StaticModel createRandomInstance() {
-            return createRandomInstance(randomFrom(TaskType.TEXT_EMBEDDING, TaskType.SPARSE_EMBEDDING));
+            return createRandomInstance(randomFrom(TaskType.TEXT_EMBEDDING, TaskType.SPARSE_EMBEDDING, TaskType.EMBEDDING));
         }
 
         public static StaticModel createRandomInstance(TaskType taskType) {
