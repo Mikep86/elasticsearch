@@ -47,6 +47,7 @@ import org.elasticsearch.inference.ChunkInferenceInput;
 import org.elasticsearch.inference.ChunkedInference;
 import org.elasticsearch.inference.InferenceService;
 import org.elasticsearch.inference.InferenceServiceRegistry;
+import org.elasticsearch.inference.InferenceString;
 import org.elasticsearch.inference.MinimalServiceSettings;
 import org.elasticsearch.inference.SimilarityMeasure;
 import org.elasticsearch.inference.TaskType;
@@ -67,6 +68,7 @@ import org.elasticsearch.xcontent.json.JsonXContent;
 import org.elasticsearch.xpack.core.XPackField;
 import org.elasticsearch.xpack.core.inference.results.ChunkedInferenceEmbedding;
 import org.elasticsearch.xpack.core.inference.results.ChunkedInferenceError;
+import org.elasticsearch.xpack.core.inference.results.EmbeddingResults;
 import org.elasticsearch.xpack.inference.InferencePlugin;
 import org.elasticsearch.xpack.inference.mapper.SemanticInferenceMetadataFieldsMapperTests;
 import org.elasticsearch.xpack.inference.mapper.SemanticTextField;
@@ -101,6 +103,7 @@ import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.getChun
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.getOriginalTextFieldName;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldMapperTests.addSemanticTextInferenceResults;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomChunkedInferenceEmbedding;
+import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomMultimodalEmbedding;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomSemanticText;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomSemanticTextInput;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.semanticTextFieldFromChunkedInferenceResults;
@@ -1253,26 +1256,13 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
                 continue;
             }
 
-            SemanticTextField semanticTextField;
-            // The model is not field aware and that is why we are skipping the embedding generation process for existing values.
-            // This prevents a situation where embeddings in the expected docMap do not match those in the model, which could happen if
-            // embeddings were overwritten.
-            if (model.hasResult(inputText)) {
-                var results = model.getResults(inputText);
-                semanticTextField = semanticTextFieldFromChunkedInferenceResults(
-                    useLegacyFormat,
-                    field,
-                    model,
-                    null,
-                    List.of(inputText),
-                    results,
-                    requestContentType
-                );
-            } else {
-                Map<String, List<String>> inputTextMap = Map.of(field, List.of(inputText));
-                semanticTextField = randomSemanticText(useLegacyFormat, field, model, null, List.of(inputText), requestContentType);
-                model.putResult(inputText, toChunkedResult(useLegacyFormat, inputTextMap, semanticTextField));
-            }
+            SemanticTextField semanticTextField = cacheRandomSemanticTextForInput(
+                useLegacyFormat,
+                field,
+                model,
+                inputObject,
+                requestContentType
+            );
 
             if (useLegacyFormat) {
                 expectedDocMap.put(field, semanticTextField);
@@ -1288,6 +1278,72 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
         return new BulkItemRequest[] {
             new BulkItemRequest(requestId, new IndexRequest("index").source(docMap, requestContentType)),
             new BulkItemRequest(requestId, new IndexRequest("index").source(expectedDocMap, requestContentType)) };
+    }
+
+    /**
+     * Returns a {@link SemanticTextField} for the given input, reusing any embeddings the {@code model} has already produced for that
+     * input. The model is not field-aware, so we skip the embedding generation process for inputs that already have a cached result. This
+     * prevents a situation where embeddings are overwritten in the {@code model}, which could cause tests to fail.
+     */
+    private static SemanticTextField cacheRandomSemanticTextForInput(
+        boolean useLegacyFormat,
+        String field,
+        StaticModel model,
+        Object input,
+        XContentType requestContentType
+    ) throws IOException {
+        if (input instanceof InferenceString inferenceString) {
+            assert useLegacyFormat == false;
+
+            EmbeddingResults.Embedding<?> embedding;
+            if (model.hasResult(inferenceString)) {
+                embedding = model.getResults(inferenceString);
+            } else {
+                embedding = randomMultimodalEmbedding(model);
+                model.putResult(inferenceString, embedding);
+            }
+
+            var chunk = SemanticTextField.toSemanticFieldChunk(0, embedding, requestContentType);
+            return new SemanticTextField(
+                false,
+                field,
+                null,
+                new SemanticTextField.InferenceResult(
+                    model.getInferenceEntityId(),
+                    new MinimalServiceSettings(model),
+                    null,
+                    Map.of(field, List.of(chunk))
+                ),
+                requestContentType
+            );
+        }
+
+        String inputText = input.toString();
+        if (model.hasResult(inputText)) {
+            var results = model.getResults(inputText);
+            return semanticTextFieldFromChunkedInferenceResults(
+                useLegacyFormat,
+                field,
+                model,
+                null,
+                List.of(inputText),
+                results,
+                requestContentType
+            );
+        }
+
+        Map<String, List<String>> inputTextMap = Map.of(field, List.of(inputText));
+        SemanticTextField semanticTextField = randomSemanticText(
+            useLegacyFormat,
+            field,
+            model,
+            null,
+            List.of(inputText),
+            requestContentType
+        );
+        model.putResult(inputText, toChunkedResult(useLegacyFormat, inputTextMap, semanticTextField));
+
+        return semanticTextField;
     }
 
     private static long length(XContentBuilder builder) {
@@ -1343,7 +1399,8 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
     }
 
     private static class StaticModel extends TestModel {
-        private final Map<String, ChunkedInference> resultMap;
+        private final Map<String, ChunkedInference> chunkedResultMap;
+        private final Map<InferenceString, EmbeddingResults.Embedding<?>> embeddingResultMap;
 
         StaticModel(
             String inferenceEntityId,
@@ -1354,7 +1411,8 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
             TestSecretSettings secretSettings
         ) {
             super(inferenceEntityId, taskType, service, serviceSettings, taskSettings, secretSettings);
-            this.resultMap = new HashMap<>();
+            this.chunkedResultMap = new HashMap<>();
+            this.embeddingResultMap = new HashMap<>();
         }
 
         public static StaticModel createRandomInstance() {
@@ -1374,15 +1432,30 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
         }
 
         ChunkedInference getResults(String text) {
-            return resultMap.getOrDefault(text, new ChunkedInferenceEmbedding(List.of()));
+            return chunkedResultMap.getOrDefault(text, new ChunkedInferenceEmbedding(List.of()));
         }
 
         void putResult(String text, ChunkedInference result) {
-            resultMap.put(text, result);
+            chunkedResultMap.put(text, result);
         }
 
         boolean hasResult(String text) {
-            return resultMap.containsKey(text);
+            return chunkedResultMap.containsKey(text);
+        }
+
+        EmbeddingResults.Embedding<?> getResults(InferenceString input) {
+            assert getTaskType() == TaskType.EMBEDDING;
+            return embeddingResultMap.get(input);
+        }
+
+        void putResult(InferenceString input, EmbeddingResults.Embedding<?> result) {
+            assert getTaskType() == TaskType.EMBEDDING;
+            embeddingResultMap.put(input, result);
+        }
+
+        boolean hasResult(InferenceString input) {
+            assert getTaskType() == TaskType.EMBEDDING;
+            return embeddingResultMap.containsKey(input);
         }
     }
 
