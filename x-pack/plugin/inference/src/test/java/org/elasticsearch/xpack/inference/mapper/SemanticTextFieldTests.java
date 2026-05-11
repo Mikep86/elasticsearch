@@ -265,6 +265,29 @@ public class SemanticTextFieldTests extends AbstractXContentTestCase<SemanticTex
         }
     }
 
+    public static EmbeddingResults<?> combineMultimodalEmbeddings(List<? extends EmbeddingResults.Embedding<?>> embeddings) {
+        if (embeddings.isEmpty()) {
+            throw new IllegalArgumentException("Cannot combine an empty list of embeddings");
+        }
+
+        Class<?> type = embeddings.getFirst().getClass();
+        for (var embedding : embeddings) {
+            if (embedding.getClass() != type) {
+                throw new IllegalArgumentException(
+                    "All embeddings must be the same concrete type, found [" + type + "] and [" + embedding.getClass() + "]"
+                );
+            }
+        }
+
+        if (type == EmbeddingFloatResults.Embedding.class) {
+            return new GenericDenseEmbeddingFloatResults(embeddings.stream().map(e -> (EmbeddingFloatResults.Embedding) e).toList());
+        }
+        if (type == EmbeddingByteResults.Embedding.class) {
+            return new GenericDenseEmbeddingByteResults(embeddings.stream().map(e -> (EmbeddingByteResults.Embedding) e).toList());
+        }
+        throw new AssertionError("Unsupported embedding type: " + type);
+    }
+
     public static EmbeddingResults.Embedding<?> randomMultimodalEmbedding(Model model) {
         if (model.getTaskType() == TaskType.EMBEDDING) {
             return switch (model.getServiceSettings().elementType()) {

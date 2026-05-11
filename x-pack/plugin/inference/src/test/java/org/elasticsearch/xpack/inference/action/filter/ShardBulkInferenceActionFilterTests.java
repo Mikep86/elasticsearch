@@ -38,6 +38,7 @@ import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.concurrent.EsRejectedExecutionException;
 import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.common.xcontent.support.XContentMapValues;
+import org.elasticsearch.core.Nullable;
 import org.elasticsearch.index.IndexVersion;
 import org.elasticsearch.index.IndexingPressure;
 import org.elasticsearch.index.mapper.InferenceMetadataFieldsMapper;
@@ -45,9 +46,12 @@ import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import org.elasticsearch.index.shard.ShardId;
 import org.elasticsearch.inference.ChunkInferenceInput;
 import org.elasticsearch.inference.ChunkedInference;
+import org.elasticsearch.inference.EmbeddingRequest;
+import org.elasticsearch.inference.InferenceServiceResults;
 import org.elasticsearch.inference.InferenceService;
 import org.elasticsearch.inference.InferenceServiceRegistry;
 import org.elasticsearch.inference.InferenceString;
+import org.elasticsearch.inference.InferenceStringGroup;
 import org.elasticsearch.inference.MinimalServiceSettings;
 import org.elasticsearch.inference.SimilarityMeasure;
 import org.elasticsearch.inference.TaskType;
@@ -68,7 +72,12 @@ import org.elasticsearch.xcontent.json.JsonXContent;
 import org.elasticsearch.xpack.core.XPackField;
 import org.elasticsearch.xpack.core.inference.results.ChunkedInferenceEmbedding;
 import org.elasticsearch.xpack.core.inference.results.ChunkedInferenceError;
+import org.elasticsearch.xpack.core.inference.results.EmbeddingByteResults;
+import org.elasticsearch.xpack.core.inference.results.EmbeddingFloatResults;
 import org.elasticsearch.xpack.core.inference.results.EmbeddingResults;
+import org.elasticsearch.xpack.core.inference.results.GenericDenseEmbeddingBitResults;
+import org.elasticsearch.xpack.core.inference.results.GenericDenseEmbeddingByteResults;
+import org.elasticsearch.xpack.core.inference.results.GenericDenseEmbeddingFloatResults;
 import org.elasticsearch.xpack.inference.InferencePlugin;
 import org.elasticsearch.xpack.inference.mapper.SemanticInferenceMetadataFieldsMapperTests;
 import org.elasticsearch.xpack.inference.mapper.SemanticTextField;
@@ -85,6 +94,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -102,6 +112,7 @@ import static org.elasticsearch.xpack.inference.action.filter.ShardBulkInference
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.getChunksFieldName;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextField.getOriginalTextFieldName;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldMapperTests.addSemanticTextInferenceResults;
+import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.combineMultimodalEmbeddings;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomChunkedInferenceEmbedding;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomMultimodalEmbedding;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomSemanticInput;
@@ -1191,6 +1202,51 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
         };
         doAnswer(chunkedInferAnswer).when(inferenceService).chunkedInfer(any(), any(), any(), any(), any(), any(), any());
 
+        Answer<?> embeddingInferAnswer = invocationOnMock -> {
+            StaticModel model = (StaticModel) invocationOnMock.getArguments()[0];
+            EmbeddingRequest request = (EmbeddingRequest) invocationOnMock.getArguments()[1];
+            ActionListener<InferenceServiceResults> listener = (ActionListener<InferenceServiceResults>) invocationOnMock.getArguments()[3];
+
+            List<InferenceStringGroup> groups = request.inputs();
+            for (InferenceStringGroup group : groups) {
+                if (group.containsMultipleInferenceStrings()) {
+                    listener.onFailure(new IllegalStateException("Each inference string group should contain only one inference string"));
+                    return null;
+                }
+                if (group.inferenceStrings().getFirst().isText()) {
+                    listener.onFailure(new IllegalStateException("Inference strings should not be used for text values"));
+                    return null;
+                }
+            }
+
+            List<? extends EmbeddingResults.Embedding<?>> embeddings = groups.stream().map(model::getResults).filter(Objects::nonNull).toList();
+            if (embeddings.isEmpty()) {
+                listener.onFailure(new IllegalStateException("No embeddings found in model"));
+                return null;
+            }
+
+            EmbeddingResults<?> combinedEmbeddings;
+            try {
+                combinedEmbeddings = combineMultimodalEmbeddings(embeddings);
+            } catch (Exception e) {
+                listener.onFailure(e);
+                return null;
+            }
+
+            Runnable runnable = () -> listener.onResponse(combinedEmbeddings);
+            if (randomBoolean()) {
+                try {
+                    threadPool.generic().execute(runnable);
+                } catch (Exception exc) {
+                    listener.onFailure(exc);
+                }
+            } else {
+                runnable.run();
+            }
+            return null;
+        };
+        doAnswer(embeddingInferAnswer).when(inferenceService).embeddingInfer(any(), any(), any(), any());
+
         doAnswer(invocationOnMock -> {
             UnparsedModel unparsedModel = invocationOnMock.getArgument(0);
             return modelMap.get(unparsedModel.inferenceEntityId());
@@ -1298,12 +1354,13 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
         if (input instanceof InferenceString inferenceString) {
             assert useLegacyFormat == false;
 
+            InferenceStringGroup group = new InferenceStringGroup(inferenceString);
             EmbeddingResults.Embedding<?> embedding;
-            if (model.hasResult(inferenceString)) {
-                embedding = model.getResults(inferenceString);
+            if (model.hasResult(group)) {
+                embedding = model.getResults(group);
             } else {
                 embedding = randomMultimodalEmbedding(model);
-                model.putResult(inferenceString, embedding);
+                model.putResult(group, embedding);
             }
 
             var chunk = SemanticTextField.toSemanticFieldChunk(0, embedding, requestContentType);
@@ -1403,7 +1460,7 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
 
     private static class StaticModel extends TestModel {
         private final Map<String, ChunkedInference> chunkedResultMap;
-        private final Map<InferenceString, EmbeddingResults.Embedding<?>> embeddingResultMap;
+        private final Map<InferenceStringGroup, EmbeddingResults.Embedding<?>> embeddingResultMap;
 
         StaticModel(
             String inferenceEntityId,
@@ -1446,19 +1503,21 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
             return chunkedResultMap.containsKey(text);
         }
 
-        EmbeddingResults.Embedding<?> getResults(InferenceString input) {
+        // TODO: Throw error on missing results
+        @Nullable
+        EmbeddingResults.Embedding<?> getResults(InferenceStringGroup group) {
             assert getTaskType() == TaskType.EMBEDDING;
-            return embeddingResultMap.get(input);
+            return embeddingResultMap.get(group);
         }
 
-        void putResult(InferenceString input, EmbeddingResults.Embedding<?> result) {
+        void putResult(InferenceStringGroup group, EmbeddingResults.Embedding<?> result) {
             assert getTaskType() == TaskType.EMBEDDING;
-            embeddingResultMap.put(input, result);
+            embeddingResultMap.put(group, result);
         }
 
-        boolean hasResult(InferenceString input) {
+        boolean hasResult(InferenceStringGroup group) {
             assert getTaskType() == TaskType.EMBEDDING;
-            return embeddingResultMap.containsKey(input);
+            return embeddingResultMap.containsKey(group);
         }
     }
 
