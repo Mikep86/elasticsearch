@@ -112,6 +112,7 @@ import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.ra
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomMultimodalEmbedding;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomSemanticInput;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomSemanticText;
+import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomSemanticTextInput;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.semanticTextFieldFromChunkedInferenceResults;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.toChunkedResult;
 import static org.hamcrest.Matchers.containsString;
@@ -314,6 +315,7 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
                     assertTrue(item.getPrimaryResponse().isFailed());
                     BulkItemResponse.Failure failure = item.getPrimaryResponse().getFailure();
                     assertThat(failure.getStatus(), equalTo(RestStatus.NOT_FOUND));
+                    assertThat(failure.getMessage(), containsString("Inference id [inference_0] not found"));
                 }
             } finally {
                 chainExecuted.countDown();
@@ -332,7 +334,14 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
         );
         BulkItemRequest[] items = new BulkItemRequest[10];
         for (int i = 0; i < items.length; i++) {
-            items[i] = randomBulkItemRequest(useLegacyFormat, Map.of(), inferenceFieldMap)[0];
+            Map<String, Object> docMap = new LinkedHashMap<>();
+            for (String field : inferenceFieldMap.keySet()) {
+                docMap.put(field, randomSemanticTextInput());
+            }
+            items[i] = new BulkItemRequest(
+                randomIntBetween(0, Integer.MAX_VALUE),
+                new IndexRequest("index").source(docMap, XContentType.JSON)
+            );
         }
         BulkShardRequest request = new BulkShardRequest(new ShardId("test", "test", 0), WriteRequest.RefreshPolicy.NONE, items);
         request.setInferenceFieldMap(inferenceFieldMap);
@@ -1325,20 +1334,17 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
         for (var entry : fieldInferenceMap.values()) {
             String field = entry.getName();
             var model = modelMap.get(entry.getInferenceId());
+            if (model == null) {
+                throw new AssertionError("model with inference ID [" + entry.getInferenceId() + "] not found in model map");
+            }
 
             Object inputObject = randomSemanticInput(
                 useLegacyFormat == false
-                    && model != null
                     && model.getTaskType() == TaskType.EMBEDDING
                     && SemanticFieldMapper.SEMANTIC_FIELD_FEATURE_FLAG.isEnabled()
             );
             docMap.put(field, inputObject);
             expectedDocMap.put(field, inputObject);
-
-            if (model == null) {
-                // ignore results, the doc should fail with a resource not found exception
-                continue;
-            }
 
             SemanticTextField semanticTextField = cacheRandomSemanticTextForInput(
                 useLegacyFormat,
