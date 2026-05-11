@@ -42,6 +42,7 @@ import org.elasticsearch.xpack.inference.InferenceIndex;
 import org.elasticsearch.xpack.inference.InferenceSecretsIndex;
 import org.elasticsearch.xpack.inference.LocalStateInferencePlugin;
 import org.elasticsearch.xpack.inference.Utils;
+import org.elasticsearch.xpack.inference.mapper.SemanticFieldMapper;
 import org.elasticsearch.xpack.inference.mapper.SemanticInferenceMetadataFieldsMapperTests;
 import org.elasticsearch.xpack.inference.mock.TestSparseInferenceServiceExtension;
 import org.elasticsearch.xpack.inference.registry.ModelRegistry;
@@ -61,6 +62,7 @@ import java.util.function.Supplier;
 import static org.elasticsearch.xpack.inference.Utils.storeModel;
 import static org.elasticsearch.xpack.inference.action.filter.ShardBulkInferenceActionFilter.INDICES_INFERENCE_BATCH_SIZE;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomInferenceString;
+import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomSemanticInput;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomSemanticTextInput;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
@@ -305,6 +307,27 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
             () -> Map.of("embedding_field", List.of(randomInferenceString(), randomInferenceString())),
             r -> assertThat(rootCause(r.getFailure().getCause()).getMessage(), containsString("expected [String|Number|Boolean]"))
         );
+    }
+
+    public void testSemanticBulkOperations() throws Exception {
+        assumeTrue("Semantic field feature flag is enabled", SemanticFieldMapper.SEMANTIC_FIELD_FEATURE_FLAG.isEnabled());
+        assumeFalse("Legacy format does not apply to the semantic field", useLegacyFormat);
+
+        prepareCreate(INDEX_NAME).setMapping(String.format(Locale.ROOT, """
+            {
+                "properties": {
+                    "semantic_field": {
+                        "type": "semantic",
+                        "inference_id": "%s"
+                    }
+                }
+            }
+            """, EMBEDDING_INFERENCE_ID)).get();
+        assertRandomBulkOperations(INDEX_NAME, isIndexRequest -> {
+            Map<String, Object> map = new HashMap<>();
+            map.put("semantic_field", isIndexRequest && rarely() ? null : randomSemanticInput(true));
+            return map;
+        });
     }
 
     public void testRestart() throws Exception {
