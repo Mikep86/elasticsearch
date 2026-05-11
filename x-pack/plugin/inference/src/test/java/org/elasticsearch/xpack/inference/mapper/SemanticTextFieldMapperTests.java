@@ -1737,7 +1737,6 @@ public class SemanticTextFieldMapperTests extends MapperTestCase {
 
     public void testMultimodalChunksNotSupported() throws Exception {
         assumeTrue("Semantic field feature flag is enabled", SemanticFieldMapper.SEMANTIC_FIELD_FEATURE_FLAG.isEnabled());
-        assumeFalse("Cannot represent multimodal chunk using legacy format", useLegacyFormat);
 
         Model model = TestModel.createRandomInstance(TaskType.EMBEDDING);
         MapperService mapperService = createMapperService(
@@ -1759,13 +1758,15 @@ public class SemanticTextFieldMapperTests extends MapperTestCase {
             XContentType.JSON
         );
 
+        String expectedMessage = useLegacyFormat
+            ? "[chunks] text doesn't support values of type: VALUE_NULL"
+            : "[semantic_text] field [field] does not support multimodal values";
         DocumentParsingException e = assertThrows(
             DocumentParsingException.class,
             () -> mapperService.documentMapper()
                 .parse(semanticTextInferenceSource(useLegacyFormat, b -> b.field("field", semanticTextField)))
         );
-        assertThat(e.getCause(), instanceOf(DocumentParsingException.class));
-        assertThat(e.getCause().getMessage(), containsString("[semantic_text] field [field] does not support multimodal values"));
+        assertThat(rootCause(e).getMessage(), containsString(expectedMessage));
     }
 
     public void testDenseVectorElementType() throws IOException {
@@ -2738,5 +2739,13 @@ public class SemanticTextFieldMapperTests extends MapperTestCase {
     @Override
     protected boolean supportsDocValuesSkippers() {
         return false;
+    }
+
+    private static Throwable rootCause(Throwable t) {
+        Throwable cause = t;
+        while (cause.getCause() != null && cause.getCause() != cause) {
+            cause = cause.getCause();
+        }
+        return cause;
     }
 }
