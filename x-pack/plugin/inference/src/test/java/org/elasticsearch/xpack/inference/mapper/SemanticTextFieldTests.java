@@ -502,14 +502,15 @@ public class SemanticTextFieldTests extends AbstractXContentTestCase<SemanticTex
                 default -> throw new AssertionError("Unexpected state");
             };
         } else {
-            if (allowInferenceStrings && randomBoolean()) {
-                return new InferenceString(
-                    randomValueOtherThan(DataType.TEXT, () -> randomFrom(DataType.values())),
-                    "data:image/jpeg;base64," + randomAlphaOfLength(10)
-                );
-            }
-            return randomAlphaOfLengthBetween(10, 20);
+            return allowInferenceStrings && randomBoolean() ? randomInferenceString() : randomAlphaOfLengthBetween(10, 20);
         }
+    }
+
+    public static InferenceString randomInferenceString() {
+        return new InferenceString(
+            randomValueOtherThan(DataType.TEXT, () -> randomFrom(DataType.values())),
+            "data:image/jpeg;base64," + randomAlphaOfLength(10)
+        );
     }
 
     public static ChunkedInference toChunkedResult(

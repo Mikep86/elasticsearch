@@ -54,10 +54,13 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Supplier;
 
 import static org.elasticsearch.xpack.inference.Utils.storeModel;
 import static org.elasticsearch.xpack.inference.action.filter.ShardBulkInferenceActionFilter.INDICES_INFERENCE_BATCH_SIZE;
+import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomInferenceString;
 import static org.elasticsearch.xpack.inference.mapper.SemanticTextFieldTests.randomSemanticTextInput;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.equalTo;
@@ -193,7 +196,7 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
         });
     }
 
-    public void testItemFailures() {
+    public void testSemanticTextItemFailures() {
         prepareCreate(INDEX_NAME).setMapping(String.format(Locale.ROOT, """
             {
                 "properties": {
@@ -204,30 +207,55 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
                     "dense_field": {
                         "type": "semantic_text",
                         "inference_id": "%s"
+                    },
+                    "embedding_field": {
+                        "type": "semantic_text",
+                        "inference_id": "%s"
                     }
                 }
             }
-            """, SPARSE_INFERENCE_ID, DENSE_INFERENCE_ID)).get();
+            """, SPARSE_INFERENCE_ID, DENSE_INFERENCE_ID, EMBEDDING_INFERENCE_ID)).get();
 
-        BulkRequestBuilder bulkReqBuilder = client().prepareBulk();
-        int totalBulkSize = randomIntBetween(100, 200);  // Use a bulk request size large enough to require batching
-        for (int bulkSize = 0; bulkSize < totalBulkSize; bulkSize++) {
-            String id = Integer.toString(bulkSize);
+        // Set a single map value on fields that use sparse_embedding & text_embedding inference services
+        assertItemFailures(INDEX_NAME, () -> Map.of("sparse_field", Map.of("foo", "bar"), "dense_field", Map.of("foo", "bar")), r -> {
+            // In the legacy format, the value is parsed as a SemanticTextField, which requires an "inference" block.
+            // In the new format, ShardBulkInferenceAction filter attempts to parse the object and fails.
+            String expectedMessage = useLegacyFormat ? "Required [inference]" : "expected [String|Number|Boolean]";
+            assertThat(rootCause(r.getFailure().getCause()).getMessage(), containsString(expectedMessage));
+        });
 
-            // Set field values that will cause errors when generating inference requests
-            Map<String, Object> source = new HashMap<>();
-            source.put("sparse_field", List.of(Map.of("foo", "bar"), Map.of("baz", "bar")));
-            source.put("dense_field", List.of(Map.of("foo", "bar"), Map.of("baz", "bar")));
+        // Set multiple map values on fields that use sparse_embedding & text_embedding inference services.
+        // In both cases (legacy and new format), ShardBulkInferenceActionFilter attempts to parse the list of objects and fails.
+        assertItemFailures(
+            INDEX_NAME,
+            () -> Map.of(
+                "sparse_field",
+                List.of(Map.of("foo", "bar"), Map.of("baz", "bar")),
+                "dense_field",
+                List.of(Map.of("foo", "bar"), Map.of("baz", "bar"))
+            ),
+            r -> assertThat(rootCause(r.getFailure().getCause()).getMessage(), containsString("expected [String|Number|Boolean]"))
+        );
 
-            bulkReqBuilder.add(new IndexRequestBuilder(client()).setIndex(INDEX_NAME).setId(id).setSource(source));
-        }
+        // Set an inference string value on a field that uses an embedding inference service
+        assertItemFailures(INDEX_NAME, () -> Map.of("embedding_field", randomInferenceString()), r -> {
+            // In the legacy format, the value is parsed as a SemanticTextField, which requires an "inference" block.
+            // In the new format, it is rejected by SemanticTextFieldMapper.
+            String expectedMessage = useLegacyFormat
+                ? "Required [inference]"
+                : "[semantic_text] field [embedding_field] does not support object values";
+            assertThat(rootCause(r.getFailure().getCause()).getMessage(), containsString(expectedMessage));
+        });
 
-        BulkResponse bulkResponse = bulkReqBuilder.get();
-        assertThat(bulkResponse.hasFailures(), equalTo(true));
-        for (BulkItemResponse bulkItemResponse : bulkResponse.getItems()) {
-            assertThat(bulkItemResponse.isFailed(), equalTo(true));
-            assertThat(bulkItemResponse.getFailureMessage(), containsString("expected [String|Number|Boolean]"));
-        }
+        // Set multiple inference string values on a field that uses an embedding inference service
+        assertItemFailures(INDEX_NAME, () -> Map.of("embedding_field", List.of(randomInferenceString(), randomInferenceString())), r -> {
+            // In the legacy format, ShardBulkInferenceActionFilter attempts to parse the list of objects and fails.
+            // In the new format, the value is rejected by SemanticTextFieldMapper.
+            String expectedMessage = useLegacyFormat
+                ? "expected [String|Number|Boolean]"
+                : "[semantic_text] field [embedding_field] does not support object values";
+            assertThat(rootCause(r.getFailure().getCause()).getMessage(), containsString(expectedMessage));
+        });
     }
 
     public void testRestart() throws Exception {
@@ -322,6 +350,27 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
         assertThat(numHits(indexName), equalTo(numHits + ids.size()));
     }
 
+    private void assertItemFailures(
+        String indexName,
+        Supplier<Map<String, Object>> sourceSupplier,
+        Consumer<BulkItemResponse> responseValidator
+    ) {
+        BulkRequestBuilder bulkReqBuilder = client().prepareBulk();
+        int totalBulkSize = randomIntBetween(100, 200);  // Use a bulk request size large enough to require batching
+        for (int bulkIdx = 0; bulkIdx < totalBulkSize; bulkIdx++) {
+            String id = Integer.toString(bulkIdx);
+            Map<String, Object> source = sourceSupplier.get();
+            bulkReqBuilder.add(new IndexRequestBuilder(client()).setIndex(indexName).setId(id).setSource(source));
+        }
+
+        BulkResponse bulkResponse = bulkReqBuilder.get(TEST_REQUEST_TIMEOUT);
+        assertThat(bulkResponse.hasFailures(), equalTo(true));
+        for (BulkItemResponse bulkItemResponse : bulkResponse.getItems()) {
+            assertThat(bulkItemResponse.isFailed(), equalTo(true));
+            responseValidator.accept(bulkItemResponse);
+        }
+    }
+
     private int numHits(String indexName) throws Exception {
         SearchSourceBuilder sourceBuilder = new SearchSourceBuilder().size(0).trackTotalHits(true);
         SearchResponse searchResponse = client().search(new SearchRequest(indexName).source(sourceBuilder)).get();
@@ -330,5 +379,13 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
         } finally {
             searchResponse.decRef();
         }
+    }
+
+    private static Throwable rootCause(Throwable t) {
+        Throwable cause = t;
+        while (cause.getCause() != null && cause.getCause() != cause) {
+            cause = cause.getCause();
+        }
+        return cause;
     }
 }
