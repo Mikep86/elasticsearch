@@ -73,6 +73,7 @@ import org.elasticsearch.xpack.core.inference.results.ChunkedInferenceEmbedding;
 import org.elasticsearch.xpack.core.inference.results.ChunkedInferenceError;
 import org.elasticsearch.xpack.core.inference.results.EmbeddingResults;
 import org.elasticsearch.xpack.inference.InferencePlugin;
+import org.elasticsearch.xpack.inference.mapper.SemanticFieldMapper;
 import org.elasticsearch.xpack.inference.mapper.SemanticInferenceMetadataFieldsMapperTests;
 import org.elasticsearch.xpack.inference.mapper.SemanticTextField;
 import org.elasticsearch.xpack.inference.model.TestModel;
@@ -1308,7 +1309,10 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
             var model = modelMap.get(entry.getInferenceId());
 
             Object inputObject = randomSemanticInput(
-                useLegacyFormat == false && model != null && model.getTaskType() == TaskType.EMBEDDING
+                useLegacyFormat == false
+                    && model != null
+                    && model.getTaskType() == TaskType.EMBEDDING
+                    && SemanticFieldMapper.SEMANTIC_FIELD_FEATURE_FLAG.isEnabled()
             );
             docMap.put(field, inputObject);
             expectedDocMap.put(field, inputObject);
