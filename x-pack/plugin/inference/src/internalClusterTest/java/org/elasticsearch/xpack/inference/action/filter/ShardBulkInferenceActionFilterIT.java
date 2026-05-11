@@ -216,23 +216,23 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
             }
             """, SPARSE_INFERENCE_ID, DENSE_INFERENCE_ID, EMBEDDING_INFERENCE_ID)).get();
 
-        // Set a single map value on fields that use sparse_embedding & text_embedding inference services
-        assertItemFailures(INDEX_NAME, () -> Map.of("sparse_field", Map.of("foo", "bar"), "dense_field", Map.of("foo", "bar")), r -> {
+        // Set a single inference string value on fields that use sparse_embedding & text_embedding inference services
+        assertItemFailures(INDEX_NAME, () -> Map.of("sparse_field", randomInferenceString(), "dense_field", randomInferenceString()), r -> {
             // In the legacy format, the value is parsed as a SemanticTextField, which requires an "inference" block.
             // In the new format, ShardBulkInferenceAction filter attempts to parse the object and fails.
             String expectedMessage = useLegacyFormat ? "Required [inference]" : "expected [String|Number|Boolean]";
             assertThat(rootCause(r.getFailure().getCause()).getMessage(), containsString(expectedMessage));
         });
 
-        // Set multiple map values on fields that use sparse_embedding & text_embedding inference services.
+        // Set multiple inference string values on fields that use sparse_embedding & text_embedding inference services.
         // In both cases (legacy and new format), ShardBulkInferenceActionFilter attempts to parse the list of objects and fails.
         assertItemFailures(
             INDEX_NAME,
             () -> Map.of(
                 "sparse_field",
-                List.of(Map.of("foo", "bar"), Map.of("baz", "bar")),
+                List.of(randomInferenceString(), randomInferenceString()),
                 "dense_field",
-                List.of(Map.of("foo", "bar"), Map.of("baz", "bar"))
+                List.of(randomInferenceString(), randomInferenceString())
             ),
             r -> assertThat(rootCause(r.getFailure().getCause()).getMessage(), containsString("expected [String|Number|Boolean]"))
         );
