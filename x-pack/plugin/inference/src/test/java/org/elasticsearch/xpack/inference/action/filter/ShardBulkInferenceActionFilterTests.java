@@ -38,7 +38,6 @@ import org.elasticsearch.common.unit.ByteSizeValue;
 import org.elasticsearch.common.util.concurrent.EsRejectedExecutionException;
 import org.elasticsearch.common.xcontent.XContentHelper;
 import org.elasticsearch.common.xcontent.support.XContentMapValues;
-import org.elasticsearch.core.Nullable;
 import org.elasticsearch.index.IndexVersion;
 import org.elasticsearch.index.IndexingPressure;
 import org.elasticsearch.index.mapper.InferenceMetadataFieldsMapper;
@@ -94,7 +93,6 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
@@ -671,6 +669,13 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
         XContentBuilder doc0UpdateSource = IndexSource.getXContentBuilder(XContentType.JSON, "sparse_field", "an updated value");
         XContentBuilder doc1UpdateSource = IndexSource.getXContentBuilder(XContentType.JSON, "dense_field", null);
 
+        for (String input : List.of("a test value", "an updated value")) {
+            sparseModel.putResult(input, randomChunkedInferenceEmbedding(sparseModel, List.of(input)));
+        }
+        for (String input : List.of("another test value", "value one", "value two")) {
+            denseModel.putResult(input, randomChunkedInferenceEmbedding(denseModel, List.of(input)));
+        }
+
         CountDownLatch chainExecuted = new CountDownLatch(1);
         ActionFilterChain actionFilterChain = (task, action, request, listener) -> {
             try {
@@ -1182,13 +1187,20 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
             StaticModel model = (StaticModel) invocationOnMock.getArguments()[0];
             List<ChunkInferenceInput> inputs = (List<ChunkInferenceInput>) invocationOnMock.getArguments()[2];
             ActionListener<List<ChunkedInference>> listener = (ActionListener<List<ChunkedInference>>) invocationOnMock.getArguments()[6];
+
             Runnable runnable = () -> {
                 List<ChunkedInference> results = new ArrayList<>();
-                for (ChunkInferenceInput input : inputs) {
-                    results.add(model.getResults(input.inputText()));
+                try {
+                    for (ChunkInferenceInput input : inputs) {
+                        results.add(model.getResults(input.inputText()));
+                    }
+                } catch (IllegalArgumentException e) {
+                    listener.onFailure(e);
+                    return;
                 }
                 listener.onResponse(results);
             };
+
             if (randomBoolean()) {
                 try {
                     threadPool.generic().execute(runnable);
@@ -1198,6 +1210,7 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
             } else {
                 runnable.run();
             }
+
             return null;
         };
         doAnswer(chunkedInferAnswer).when(inferenceService).chunkedInfer(any(), any(), any(), any(), any(), any(), any());
@@ -1219,14 +1232,9 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
                 }
             }
 
-            List<? extends EmbeddingResults.Embedding<?>> embeddings = groups.stream().map(model::getResults).filter(Objects::nonNull).toList();
-            if (embeddings.isEmpty()) {
-                listener.onFailure(new IllegalStateException("No embeddings found in model"));
-                return null;
-            }
-
             EmbeddingResults<?> combinedEmbeddings;
             try {
+                var embeddings = groups.stream().map(model::getResults).toList();
                 combinedEmbeddings = combineMultimodalEmbeddings(embeddings);
             } catch (Exception e) {
                 listener.onFailure(e);
@@ -1492,7 +1500,11 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
         }
 
         ChunkedInference getResults(String text) {
-            return chunkedResultMap.getOrDefault(text, new ChunkedInferenceEmbedding(List.of()));
+            ChunkedInference result = chunkedResultMap.get(text);
+            if (result == null) {
+                throw new IllegalArgumentException("No chunked text inference result cached for input [" + text + "]");
+            }
+            return result;
         }
 
         void putResult(String text, ChunkedInference result) {
@@ -1503,11 +1515,13 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
             return chunkedResultMap.containsKey(text);
         }
 
-        // TODO: Throw error on missing results
-        @Nullable
         EmbeddingResults.Embedding<?> getResults(InferenceStringGroup group) {
             assert getTaskType() == TaskType.EMBEDDING;
-            return embeddingResultMap.get(group);
+            EmbeddingResults.Embedding<?> result = embeddingResultMap.get(group);
+            if (result == null) {
+                throw new IllegalArgumentException("No multimodal inference result cached for inference string group [" + group + "]");
+            }
+            return result;
         }
 
         void putResult(InferenceStringGroup group, EmbeddingResults.Embedding<?> result) {
