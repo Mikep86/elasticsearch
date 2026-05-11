@@ -140,26 +140,7 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
             .put(IndexMetadata.SETTING_NUMBER_OF_SHARDS, randomIntBetween(1, 10))
             .put(InferenceMetadataFieldsMapper.USE_LEGACY_SEMANTIC_TEXT_FORMAT.getKey(), useLegacyFormat);
         if (useLegacyFormat) {
-            IndexVersion legacyVersion;
-            if (useSyntheticSource) {
-                // Must be in a range that supports both legacy format and synthetic source recovery.
-                if (randomBoolean()) {
-                    // 9.x overlap: USE_SYNTHETIC_SOURCE_FOR_RECOVERY → before SEMANTIC_TEXT_LEGACY_FORMAT_FORBIDDEN
-                    legacyVersion = IndexVersionUtils.randomVersionBetween(
-                        IndexVersions.USE_SYNTHETIC_SOURCE_FOR_RECOVERY,
-                        IndexVersionUtils.getPreviousVersion(IndexVersions.SEMANTIC_TEXT_LEGACY_FORMAT_FORBIDDEN)
-                    );
-                } else {
-                    // 8.x overlap: USE_SYNTHETIC_SOURCE_FOR_RECOVERY_BACKPORT → before UPGRADE_TO_LUCENE_10_0_0
-                    legacyVersion = IndexVersionUtils.randomVersionBetween(
-                        IndexVersions.USE_SYNTHETIC_SOURCE_FOR_RECOVERY_BACKPORT,
-                        IndexVersionUtils.getPreviousVersion(IndexVersions.UPGRADE_TO_LUCENE_10_0_0)
-                    );
-                }
-            } else {
-                legacyVersion = SemanticInferenceMetadataFieldsMapperTests.getRandomCompatibleIndexVersion(true);
-            }
-            builder.put(IndexMetadata.SETTING_VERSION_CREATED, legacyVersion);
+            builder.put(IndexMetadata.SETTING_VERSION_CREATED, getRandomCompatiblePreSemanticFieldIndexVersion());
         }
         if (useSyntheticSource) {
             builder.put(IndexSettings.RECOVERY_USE_SYNTHETIC_SOURCE_SETTING.getKey(), true);
@@ -256,6 +237,74 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
                 : "[semantic_text] field [embedding_field] does not support object values";
             assertThat(rootCause(r.getFailure().getCause()).getMessage(), containsString(expectedMessage));
         });
+    }
+
+    /**
+     * Semantic text fields in indices created prior to the introduction of the semantic field should not be able to parse objects
+     * (other than the legacy format object)
+     */
+    public void testSemanticTextItemFailuresWithPreSemanticFieldIndexVersion() {
+        // Set an index version that does not support the semantic field type
+        Settings settings = Settings.builder()
+            .put(indexSettings())
+            .put(IndexMetadata.SETTING_VERSION_CREATED, getRandomCompatiblePreSemanticFieldIndexVersion())
+            .build();
+
+        prepareCreate(INDEX_NAME).setSettings(settings).setMapping(String.format(Locale.ROOT, """
+            {
+                "properties": {
+                    "sparse_field": {
+                        "type": "semantic_text",
+                        "inference_id": "%s"
+                    },
+                    "dense_field": {
+                        "type": "semantic_text",
+                        "inference_id": "%s"
+                    },
+                    "embedding_field": {
+                        "type": "semantic_text",
+                        "inference_id": "%s"
+                    }
+                }
+            }
+            """, SPARSE_INFERENCE_ID, DENSE_INFERENCE_ID, EMBEDDING_INFERENCE_ID)).get();
+
+        // Set a single inference string value on fields that use sparse_embedding & text_embedding inference services
+        assertItemFailures(INDEX_NAME, () -> Map.of("sparse_field", randomInferenceString(), "dense_field", randomInferenceString()), r -> {
+            // In the legacy format, the value is parsed as a SemanticTextField, which requires an "inference" block.
+            // In the new format, ShardBulkInferenceAction filter attempts to parse the object and fails.
+            String expectedMessage = useLegacyFormat ? "Required [inference]" : "expected [String|Number|Boolean]";
+            assertThat(rootCause(r.getFailure().getCause()).getMessage(), containsString(expectedMessage));
+        });
+
+        // Set multiple inference string values on fields that use sparse_embedding & text_embedding inference services.
+        // In both cases (legacy and new format), ShardBulkInferenceActionFilter attempts to parse the list of objects and fails.
+        assertItemFailures(
+            INDEX_NAME,
+            () -> Map.of(
+                "sparse_field",
+                List.of(randomInferenceString(), randomInferenceString()),
+                "dense_field",
+                List.of(randomInferenceString(), randomInferenceString())
+            ),
+            r -> assertThat(rootCause(r.getFailure().getCause()).getMessage(), containsString("expected [String|Number|Boolean]"))
+        );
+
+        // Set an inference string value on a field that uses an embedding inference service
+        assertItemFailures(INDEX_NAME, () -> Map.of("embedding_field", randomInferenceString()), r -> {
+            // In the legacy format, the value is parsed as a SemanticTextField, which requires an "inference" block.
+            // In the new format, ShardBulkInferenceAction filter attempts to parse the object and fails.
+            String expectedMessage = useLegacyFormat ? "Required [inference]" : "expected [String|Number|Boolean]";
+            assertThat(rootCause(r.getFailure().getCause()).getMessage(), containsString(expectedMessage));
+        });
+
+        // Set multiple inference string values on a field that uses an embedding inference service.
+        // In both cases (legacy and new format), ShardBulkInferenceActionFilter attempts to parse the list of objects and fails.
+        assertItemFailures(
+            INDEX_NAME,
+            () -> Map.of("embedding_field", List.of(randomInferenceString(), randomInferenceString())),
+            r -> assertThat(rootCause(r.getFailure().getCause()).getMessage(), containsString("expected [String|Number|Boolean]"))
+        );
     }
 
     public void testRestart() throws Exception {
@@ -379,6 +428,46 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
         } finally {
             searchResponse.decRef();
         }
+    }
+
+    private IndexVersion getRandomCompatiblePreSemanticFieldIndexVersion() {
+        if (useLegacyFormat) {
+            if (useSyntheticSource) {
+                // Must be in a range that supports both legacy format and synthetic source recovery.
+                if (randomBoolean()) {
+                    // 9.x
+                    return IndexVersionUtils.randomVersionBetween(
+                        IndexVersions.USE_SYNTHETIC_SOURCE_FOR_RECOVERY,
+                        IndexVersionUtils.getPreviousVersion(IndexVersions.SEMANTIC_TEXT_LEGACY_FORMAT_FORBIDDEN)
+                    );
+                }
+
+                // 8.x
+                return IndexVersionUtils.randomVersionBetween(
+                    IndexVersions.USE_SYNTHETIC_SOURCE_FOR_RECOVERY_BACKPORT,
+                    IndexVersionUtils.getPreviousVersion(IndexVersions.UPGRADE_TO_LUCENE_10_0_0)
+                );
+            }
+
+            return SemanticInferenceMetadataFieldsMapperTests.getRandomCompatibleIndexVersion(true);
+        }
+
+        // New format, strictly before SEMANTIC_FIELD_TYPE. The new-format lower bound
+        // (INFERENCE_METADATA_FIELDS{,_BACKPORT}) is already above the synthetic-source recovery lower bound
+        // in both major branches, so useSyntheticSource does not further constrain the window.
+        if (randomBoolean()) {
+            // 9.x
+            return IndexVersionUtils.randomVersionBetween(
+                IndexVersions.INFERENCE_METADATA_FIELDS,
+                IndexVersionUtils.getPreviousVersion(IndexVersions.SEMANTIC_FIELD_TYPE)
+            );
+        }
+
+        // 8.x
+        return IndexVersionUtils.randomVersionBetween(
+            IndexVersions.INFERENCE_METADATA_FIELDS_BACKPORT,
+            IndexVersionUtils.getPreviousVersion(IndexVersions.UPGRADE_TO_LUCENE_10_0_0)
+        );
     }
 
     private static Throwable rootCause(Throwable t) {
