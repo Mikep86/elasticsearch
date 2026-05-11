@@ -72,6 +72,7 @@ import org.elasticsearch.xpack.core.XPackField;
 import org.elasticsearch.xpack.core.inference.results.ChunkedInferenceEmbedding;
 import org.elasticsearch.xpack.core.inference.results.ChunkedInferenceError;
 import org.elasticsearch.xpack.core.inference.results.EmbeddingResults;
+import org.elasticsearch.xpack.inference.InferenceException;
 import org.elasticsearch.xpack.inference.InferencePlugin;
 import org.elasticsearch.xpack.inference.mapper.SemanticFieldMapper;
 import org.elasticsearch.xpack.inference.mapper.SemanticInferenceMetadataFieldsMapperTests;
@@ -134,7 +135,6 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 public class ShardBulkInferenceActionFilterTests extends ESTestCase {
@@ -1029,7 +1029,6 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
         verify(coordinatingIndexingPressure).close();
     }
 
-    // TODO: Update test to trigger multiple inference failures
     @SuppressWarnings("unchecked")
     public void testMultipleFailuresPerIndexRequest() throws Exception {
         final InferenceStats inferenceStats = InferenceStatsTests.mockInferenceStats();
@@ -1037,8 +1036,25 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
             // Set the coordinating bytes limit high enough to handle all the requests
             Settings.builder().put(MAX_COORDINATING_BYTES.getKey(), "100kb").build()
         );
-        final ShardBulkInferenceActionFilter filter = createFilter(threadPool, Map.of(), indexingPressure, useLegacyFormat, inferenceStats);
+        final StaticModel model = StaticModel.createRandomInstance();
+        final ShardBulkInferenceActionFilter filter = createFilter(
+            threadPool,
+            Map.of(model.getInferenceEntityId(), model),
+            indexingPressure,
+            useLegacyFormat,
+            inferenceStats
+        );
         final int docCount = 10;
+
+        // Seed the model with failures for every input
+        List<List<String>> docInputs = new ArrayList<>(docCount);
+        for (int i = 0; i < docCount; i++) {
+            List<String> inputs = randomList(2, 5, () -> randomAlphaOfLengthBetween(3, 20));
+            docInputs.add(inputs);
+            for (String input : inputs) {
+                model.putResult(input, new ChunkedInferenceError(new IllegalArgumentException("boom: " + input)));
+            }
+        }
 
         final Consumer<BulkItemRequest> assertBulkItemRequest = (item) -> {
             BulkItemResponse response = item.getPrimaryResponse();
@@ -1047,12 +1063,11 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
 
             BulkItemResponse.Failure failure = response.getFailure();
             assertNotNull(failure);
-            assertThat(failure.getStatus(), is(RestStatus.NOT_FOUND));
-            assertThat(failure.getCause(), instanceOf(ResourceNotFoundException.class));
-            assertThat(
-                failure.getCause().getMessage(),
-                containsString("Inference id [missing_inference_id] not found for field [inference_field]")
-            );
+            assertThat(failure.getStatus(), is(RestStatus.BAD_REQUEST));
+            assertThat(failure.getCause(), instanceOf(InferenceException.class));
+            assertThat(failure.getCause().getMessage(), containsString("Exception when running inference id"));
+            assertThat(failure.getCause().getCause(), instanceOf(IllegalArgumentException.class));
+            assertThat(failure.getCause().getCause().getMessage(), containsString("boom"));
             assertThat(failure.getCause().getSuppressed(), emptyArray());
         };
 
@@ -1068,7 +1083,11 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
 
                 IndexingPressure.Coordinating coordinatingIndexingPressure = indexingPressure.getCoordinating();
                 assertThat(coordinatingIndexingPressure, notNullValue());
-                verifyNoInteractions(coordinatingIndexingPressure);
+
+                // Each item increments pre-inference indexing pressure exactly once. Since every item fails, there are no
+                // post-inference source-update increments.
+                verify(coordinatingIndexingPressure, times(docCount)).increment(eq(1), anyLong());
+                verify(coordinatingIndexingPressure, times(docCount)).increment(anyInt(), anyLong());
 
                 // Verify that the coordinating indexing pressure is maintained through downstream action filters
                 verify(coordinatingIndexingPressure, never()).close();
@@ -1084,16 +1103,15 @@ public class ShardBulkInferenceActionFilterTests extends ESTestCase {
 
         Map<String, InferenceFieldMetadata> inferenceFieldMap = Map.of(
             "inference_field",
-            new InferenceFieldMetadata("inference_field", "missing_inference_id", new String[] { "inference_field" }, null)
+            new InferenceFieldMetadata("inference_field", model.getInferenceEntityId(), new String[] { "inference_field" }, null)
         );
 
         BulkItemRequest[] items = new BulkItemRequest[docCount];
         for (int i = 0; i < docCount; i++) {
             // Use a multivalued input to generate multiple failures per index request. Only the first failure should be kept.
-            List<String> inferenceFieldValue = randomList(2, 5, () -> randomAlphaOfLengthBetween(3, 20));
             items[i] = new BulkItemRequest(
                 i,
-                new IndexRequest("index").id(Integer.toString(i)).source("inference_field", inferenceFieldValue)
+                new IndexRequest("index").id(Integer.toString(i)).source("inference_field", docInputs.get(i))
             );
         }
 
