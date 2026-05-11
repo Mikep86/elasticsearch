@@ -68,6 +68,7 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
 
     private static final String SPARSE_INFERENCE_ID = "sparse-endpoint";
     private static final String DENSE_INFERENCE_ID = "dense-endpoint";
+    private static final String EMBEDDING_INFERENCE_ID = "embedding-endpoint";
 
     private final boolean useLegacyFormat;
     private final boolean useSyntheticSource;
@@ -106,6 +107,7 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
         int dimensions = DenseVectorFieldMapperTestUtils.randomCompatibleDimensions(elementType, 100);
         Utils.storeSparseModel(SPARSE_INFERENCE_ID, modelRegistry);
         Utils.storeDenseModel(DENSE_INFERENCE_ID, modelRegistry, dimensions, similarity, elementType);
+        Utils.storeEmbeddingModel(EMBEDDING_INFERENCE_ID, modelRegistry, dimensions, similarity, elementType);
     }
 
     @Override
@@ -163,7 +165,7 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
         return builder.build();
     }
 
-    public void testBulkOperations() throws Exception {
+    public void testSemanticTextBulkOperations() throws Exception {
         prepareCreate(INDEX_NAME).setMapping(String.format(Locale.ROOT, """
             {
                 "properties": {
@@ -174,14 +176,19 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
                     "dense_field": {
                         "type": "semantic_text",
                         "inference_id": "%s"
+                    },
+                    "embedding_field": {
+                        "type": "semantic_text",
+                        "inference_id": "%s"
                     }
                 }
             }
-            """, SPARSE_INFERENCE_ID, DENSE_INFERENCE_ID)).get();
+            """, SPARSE_INFERENCE_ID, DENSE_INFERENCE_ID, EMBEDDING_INFERENCE_ID)).get();
         assertRandomBulkOperations(INDEX_NAME, isIndexRequest -> {
             Map<String, Object> map = new HashMap<>();
             map.put("sparse_field", isIndexRequest && rarely() ? null : randomSemanticTextInput());
             map.put("dense_field", isIndexRequest && rarely() ? null : randomSemanticTextInput());
+            map.put("embedding_field", isIndexRequest && rarely() ? null : randomSemanticTextInput());
             return map;
         });
     }
