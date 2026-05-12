@@ -29,6 +29,8 @@ import org.elasticsearch.index.mapper.InferenceMetadataFieldsMapper;
 import org.elasticsearch.index.mapper.SourceFieldMapper;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapperTestUtils;
+import org.elasticsearch.inference.DataType;
+import org.elasticsearch.inference.InferenceString;
 import org.elasticsearch.inference.Model;
 import org.elasticsearch.inference.SimilarityMeasure;
 import org.elasticsearch.license.LicenseSettings;
@@ -220,6 +222,14 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
             r -> assertThat(rootCause(r.getFailure().getCause()).getMessage(), containsString("expected [String|Number|Boolean]"))
         );
 
+        // Set a list of lists value on fields that use sparse_embedding & text_embedding inference services.
+        // In both cases (legacy and new format), ShardBulkInferenceActionFilter attempts to parse the list of lists and fails.
+        assertItemFailures(
+            INDEX_NAME,
+            () -> Map.of("sparse_field", List.of(List.of("foo", "bar")), "dense_field", List.of(List.of("foo", "bar"))),
+            r -> assertThat(rootCause(r.getFailure().getCause()).getMessage(), containsString("expected [String|Number|Boolean]"))
+        );
+
         // Set an inference string value on a field that uses an embedding inference service
         assertItemFailures(INDEX_NAME, () -> Map.of("embedding_field", randomInferenceString()), r -> {
             // In the legacy format, the value is parsed as a SemanticTextField, which requires an "inference" block.
@@ -237,6 +247,15 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
             String expectedMessage = useLegacyFormat
                 ? "expected [String|Number|Boolean]"
                 : "[semantic_text] field [embedding_field] does not support object values";
+            assertThat(rootCause(r.getFailure().getCause()).getMessage(), containsString(expectedMessage));
+        });
+
+        // Set a list of lists value on a field that uses an embedding inference service.
+        // In both cases (legacy and new format), ShardBulkInferenceActionFilter attempts to parse the list of lists and fails.
+        assertItemFailures(INDEX_NAME, () -> Map.of("embedding_field", List.of(List.of("foo", "bar"))), r -> {
+            String expectedMessage = useLegacyFormat
+                ? "expected [String|Number|Boolean]"
+                : "expected [String|Number|Boolean|InferenceString]";
             assertThat(rootCause(r.getFailure().getCause()).getMessage(), containsString(expectedMessage));
         });
     }
@@ -328,6 +347,52 @@ public class ShardBulkInferenceActionFilterIT extends ESIntegTestCase {
             map.put("semantic_field", isIndexRequest && rarely() ? null : randomSemanticInput(true));
             return map;
         });
+    }
+
+    public void testSemanticItemFailures() {
+        assumeTrue("Semantic field feature flag is enabled", SemanticFieldMapper.SEMANTIC_FIELD_FEATURE_FLAG.isEnabled());
+        assumeFalse("Legacy format does not apply to the semantic field", useLegacyFormat);
+
+        prepareCreate(INDEX_NAME).setMapping(String.format(Locale.ROOT, """
+            {
+                "properties": {
+                    "semantic_field": {
+                        "type": "semantic",
+                        "inference_id": "%s"
+                    }
+                }
+            }
+            """, EMBEDDING_INFERENCE_ID)).get();
+
+        // Malformed inference string
+        assertItemFailures(
+            INDEX_NAME,
+            () -> Map.of("semantic_field", Map.of("type", "image", "format", "text", "value", "x")),
+            r -> assertThat(
+                rootCause(r.getFailure().getCause()).getMessage(),
+                containsString("Data type [image] does not support data format [text], supported formats are [base64]")
+            )
+        );
+
+        // Text expressed as an inference string object
+        assertItemFailures(
+            INDEX_NAME,
+            () -> Map.of("semantic_field", new InferenceString(DataType.TEXT, "foo")),
+            r -> assertThat(
+                rootCause(r.getFailure().getCause()).getMessage(),
+                containsString("Objects for text values are not supported, use a string literal instead")
+            )
+        );
+
+        // List of lists of values
+        assertItemFailures(
+            INDEX_NAME,
+            () -> Map.of("semantic_field", List.of(List.of("foo", "bar"))),
+            r -> assertThat(
+                rootCause(r.getFailure().getCause()).getMessage(),
+                containsString("expected [String|Number|Boolean|InferenceString]")
+            )
+        );
     }
 
     public void testRestart() throws Exception {
