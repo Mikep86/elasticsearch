@@ -115,3 +115,108 @@ setup:
   - exists:     hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.3.embeddings
   - not_exists: hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.3.start_offset
   - not_exists: hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.3.end_offset
+
+---
+"Explicit null in bulk update request clears inference results":
+  - do:
+      indices.create:
+        index: test-semantic-field-copy-to-index
+        body:
+          mappings:
+            properties:
+              source_field:
+                type: text
+                copy_to: semantic_field
+              semantic_field:
+                type: semantic
+                inference_id: embedding-inference-id
+
+  - do:
+      index:
+        index: test-semantic-field-copy-to-index
+        id: doc_1
+        body:
+          source_field: "the quick brown fox"
+          semantic_field:
+            type: image
+            value: "data:image/jpeg;base64,Y2F0IG9uIGEgd2luZG93c2lsbA=="
+        refresh: true
+
+  - do:
+      search:
+        index: test-semantic-field-copy-to-index
+        body:
+          query:
+            match_all: { }
+          _source:
+            exclude_vectors: false
+
+  - match: { hits.total.value: 1 }
+  - match: { hits.hits.0._id: doc_1 }
+
+  # Image chunk from the directly assigned semantic_field value
+  - length:     { hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field: 1 }
+  - match:      { hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.0.input_index: 0 }
+  - exists:     hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.0.embeddings
+  - not_exists: hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.0.start_offset
+  - not_exists: hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.0.end_offset
+
+  # Text chunk from source_field via copy_to
+  - length:     { hits.hits.0._source._inference_fields.semantic_field.inference.chunks.source_field: 1 }
+  - match:      { hits.hits.0._source._inference_fields.semantic_field.inference.chunks.source_field.0.start_offset: 0 }
+  - match:      { hits.hits.0._source._inference_fields.semantic_field.inference.chunks.source_field.0.end_offset: 19 }
+  - exists:     hits.hits.0._source._inference_fields.semantic_field.inference.chunks.source_field.0.embeddings
+  - not_exists: hits.hits.0._source._inference_fields.semantic_field.inference.chunks.source_field.0.input_index
+
+  # Null out the source field — its copy_to chunk should be cleared; image chunk should remain
+  - do:
+      bulk:
+        body:
+          - '{"update": {"_index": "test-semantic-field-copy-to-index", "_id": "doc_1"}}'
+          - '{"doc": { "source_field": null }}'
+        refresh: true
+
+  - match: { errors: false }
+  - match: { items.0.update.result: "updated" }
+
+  - do:
+      search:
+        index: test-semantic-field-copy-to-index
+        body:
+          query:
+            match_all: { }
+          _source:
+            exclude_vectors: false
+
+  - match: { hits.total.value: 1 }
+  - match: { hits.hits.0._id: doc_1 }
+  - not_exists: hits.hits.0._source.source_field
+  - not_exists: hits.hits.0._source._inference_fields.semantic_field.inference.chunks.source_field
+  - length:     { hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field: 1 }
+  - match:      { hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.0.input_index: 0 }
+  - exists:     hits.hits.0._source._inference_fields.semantic_field.inference.chunks.semantic_field.0.embeddings
+
+  # Null out the semantic field itself — entire inference entry should be cleared
+  - do:
+      bulk:
+        body:
+          - '{"update": {"_index": "test-semantic-field-copy-to-index", "_id": "doc_1"}}'
+          - '{"doc": { "semantic_field": null }}'
+        refresh: true
+
+  - match: { errors: false }
+  - match: { items.0.update.result: "updated" }
+
+  - do:
+      search:
+        index: test-semantic-field-copy-to-index
+        body:
+          query:
+            match_all: { }
+          _source:
+            exclude_vectors: false
+
+  - match: { hits.total.value: 1 }
+  - match: { hits.hits.0._id: doc_1 }
+  - not_exists: hits.hits.0._source.semantic_field
+  - not_exists: hits.hits.0._source._inference_fields
