@@ -10,7 +10,10 @@
 package org.elasticsearch.search.fetch.subphase;
 
 import org.apache.lucene.index.LeafReaderContext;
+import org.elasticsearch.index.mapper.InferenceFieldMapper;
 import org.elasticsearch.index.mapper.InferenceMetadataFieldsMapper;
+import org.elasticsearch.index.mapper.Mapper;
+import org.elasticsearch.index.mapper.MappingLookup;
 import org.elasticsearch.search.SearchHit;
 import org.elasticsearch.search.fetch.FetchContext;
 import org.elasticsearch.search.fetch.FetchSubPhase;
@@ -65,6 +68,7 @@ public final class FetchSourcePhase implements FetchSubPhase {
                 // If this is a parent document and there are no source filters, then add the source as-is.
                 if (nestedHit == false && sourceFilter == null) {
                     source = replaceInferenceMetadataFields(hitContext.hit(), source);
+                    source = filterInferenceFields(source);
                     hitContext.hit().sourceRef(source.internalSourceRef());
                     fastPath++;
                     return;
@@ -76,6 +80,7 @@ public final class FetchSourcePhase implements FetchSubPhase {
                 } else {
                     // Otherwise, filter the source and add it to the hit.
                     source = sourceFilter != null ? source.filter(sourceFilter) : source;
+                    source = filterInferenceFields(source);
                 }
                 if (nestedHit) {
                     source = extractNested(source, hitContext.hit().getNestedIdentity());
@@ -83,6 +88,19 @@ public final class FetchSourcePhase implements FetchSubPhase {
                     source = replaceInferenceMetadataFields(hitContext.hit(), source);
                 }
                 hitContext.hit().sourceRef(source.internalSourceRef());
+            }
+
+            private Source filterInferenceFields(Source source) {
+                MappingLookup mappingLookup = fetchContext.getSearchExecutionContext().getMappingLookup();
+                for (String field : mappingLookup.inferenceFields().keySet()) {
+                    Mapper mapper = mappingLookup.getMapper(field);
+                    if (mapper instanceof InferenceFieldMapper inferenceFieldMapper) {
+                        source = inferenceFieldMapper.filterSource(source);
+                    } else {
+                        throw new IllegalStateException("Field [" + field + "] is not an inference field");
+                    }
+                }
+                return source;
             }
 
             /**
