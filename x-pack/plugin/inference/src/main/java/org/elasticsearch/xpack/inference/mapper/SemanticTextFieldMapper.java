@@ -39,6 +39,7 @@ import org.elasticsearch.inference.ChunkingSettings;
 import org.elasticsearch.inference.MinimalServiceSettings;
 import org.elasticsearch.logging.LogManager;
 import org.elasticsearch.logging.Logger;
+import org.elasticsearch.search.lookup.Source;
 import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentLocation;
 import org.elasticsearch.xcontent.XContentParser;
@@ -492,6 +493,11 @@ public class SemanticTextFieldMapper extends SemanticFieldMapper {
     @Override
     public SemanticTextFieldType fieldType() {
         return (SemanticTextFieldType) super.fieldType();
+    }
+
+    @Override
+    public Source filterSource(Source source) {
+        return source;
     }
 
     @Override

@@ -52,11 +52,14 @@ import org.elasticsearch.index.query.NestedQueryBuilder;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.SearchExecutionContext;
 import org.elasticsearch.inference.ChunkingSettings;
+import org.elasticsearch.inference.DataFormat;
 import org.elasticsearch.inference.InferenceResults;
+import org.elasticsearch.inference.InferenceString;
 import org.elasticsearch.inference.MinimalServiceSettings;
 import org.elasticsearch.inference.TaskType;
 import org.elasticsearch.logging.LogManager;
 import org.elasticsearch.logging.Logger;
+import org.elasticsearch.search.lookup.Source;
 import org.elasticsearch.search.vectors.KnnVectorQueryBuilder;
 import org.elasticsearch.xcontent.XContentBuilder;
 import org.elasticsearch.xcontent.XContentFactory;
@@ -72,7 +75,9 @@ import org.elasticsearch.xpack.inference.registry.ModelRegistry;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -616,6 +621,38 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
         Map<String, Object> asMap = fieldTypeChunkingSettings != null ? fieldTypeChunkingSettings.asMap() : null;
 
         return new InferenceFieldMetadata(fullPath(), fieldType().getInferenceId(), fieldType().getSearchInferenceId(), copyFields, asMap);
+    }
+
+    @Override
+    public Source filterSource(Source source) {
+        Object valueObj = XContentMapValues.extractValue(fullPath(), source.source());
+        if (valueObj == null) {
+            return source;
+        }
+
+        List<Object> parsed = SemanticTextUtils.nodeObjectValues(fullPath(), valueObj);
+        boolean modified = false;
+        List<Object> originals = valueObj instanceof Collection<?> c ? new ArrayList<>(c) : List.of(valueObj);
+        List<Object> replacement = new ArrayList<>(parsed.size());
+        for (int i = 0; i < parsed.size(); i++) {
+            Object v = parsed.get(i);
+            if (v instanceof InferenceString is && is.dataFormat() == DataFormat.BASE64) {
+                LinkedHashMap<String, Object> stripped = new LinkedHashMap<>();
+                stripped.put(InferenceString.TYPE_FIELD, is.dataType().toString());
+                stripped.put(InferenceString.FORMAT_FIELD, is.dataFormat().toString());
+                replacement.add(stripped);
+                modified = true;
+            } else {
+                replacement.add(originals.get(i));
+            }
+        }
+
+        if (modified == false) {
+            return source;
+        }
+
+        Object newValue = valueObj instanceof Collection ? replacement : replacement.get(0);
+        return source.withMutations(map -> XContentMapValues.insertValue(fullPath(), map, newValue));
     }
 
     @Override

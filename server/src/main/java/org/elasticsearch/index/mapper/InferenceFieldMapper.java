@@ -11,6 +11,7 @@ package org.elasticsearch.index.mapper;
 
 import org.elasticsearch.cluster.metadata.InferenceFieldMetadata;
 import org.elasticsearch.inference.InferenceService;
+import org.elasticsearch.search.lookup.Source;
 
 import java.util.Set;
 
@@ -25,4 +26,6 @@ public interface InferenceFieldMapper {
      * @param sourcePaths The source path that populates the input for the field (before inference)
      */
     InferenceFieldMetadata getMetadata(Set<String> sourcePaths);
+
+    Source filterSource(Source source);
 }
