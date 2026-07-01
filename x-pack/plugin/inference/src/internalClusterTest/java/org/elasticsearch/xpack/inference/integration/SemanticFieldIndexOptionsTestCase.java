@@ -14,6 +14,7 @@ import org.elasticsearch.cluster.metadata.IndexMetadata;
 import org.elasticsearch.common.bytes.BytesReference;
 import org.elasticsearch.common.settings.Settings;
 import org.elasticsearch.common.xcontent.XContentHelper;
+import org.elasticsearch.common.xcontent.support.XContentMapValues;
 import org.elasticsearch.core.Nullable;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.IndexVersion;
@@ -54,10 +55,12 @@ import java.util.Map;
 
 import static org.elasticsearch.test.hamcrest.ElasticsearchAssertions.assertAcked;
 import static org.hamcrest.CoreMatchers.equalTo;
+import static org.hamcrest.CoreMatchers.is;
+import static org.hamcrest.CoreMatchers.nullValue;
 
 /**
  * Base class for integration tests covering {@code index_options} serialization (including
- * {@code include_defaults} and element-type defaulting behavior) for semantic vector field types
+ * {@code include_defaults} and element-type defaulting behavior) for field types
  * ({@code semantic} and {@code semantic_text}). Provides shared cluster setup, license management,
  * inference-endpoint bookkeeping, and mapping/field-mapping helpers; subclasses supply the field
  * type under test and the actual test methods.
@@ -66,12 +69,41 @@ import static org.hamcrest.CoreMatchers.equalTo;
 public abstract class SemanticFieldIndexOptionsTestCase extends ESIntegTestCase {
     protected static final String INDEX_NAME = "test-index";
 
+    protected static final Map<String, Object> FLOAT_SERVICE_SETTINGS = Map.of(
+        "model",
+        "my_model",
+        "dimensions",
+        256,
+        "similarity",
+        "cosine",
+        "api_key",
+        "my_api_key"
+    );
+
+    protected static final Map<String, Object> BFLOAT16_SERVICE_SETTINGS = Map.of(
+        "model",
+        "my_model",
+        "dimensions",
+        256,
+        "similarity",
+        "cosine",
+        "api_key",
+        "my_api_key",
+        "element_type",
+        "bfloat16"
+    );
+
     private final Map<String, TaskType> inferenceIds = new HashMap<>();
 
     /**
      * The {@code type} value ({@code semantic} or {@code semantic_text}) used when generating field mappings.
      */
     protected abstract String fieldType();
+
+    /**
+     * The {@link TaskType} used when creating the dense-embedding inference endpoint used by shared tests.
+     */
+    protected abstract TaskType taskType();
 
     @Override
     protected Settings nodeSettings(int nodeOrdinal, Settings otherSettings) {
@@ -240,5 +272,89 @@ public abstract class SemanticFieldIndexOptionsTestCase extends ESIntegTestCase 
         internalCluster().fullRestart(new InternalTestCluster.RestartCallback());
         ensureGreen(InferenceIndex.INDEX_NAME);
         assertLicense(License.LicenseType.BASIC);
+    }
+
+    public void testGetDefaultIndexOptionsWithElementTypeOverride() throws Exception {
+        final String inferenceId = randomIdentifier();
+        final String inferenceFieldName = "inference_field";
+
+        // Create the index before the inference endpoint exists. Default index options cannot be determined yet.
+        assertAcked(safeGet(prepareCreate(INDEX_NAME).setMapping(generateMapping(inferenceFieldName, inferenceId, null)).execute()));
+        Map<String, Object> actualFieldMappings = getFieldMappings(inferenceFieldName, true);
+
+        Map<String, Object> inferenceFieldMappings = XContentMapValues.nodeMapValue(
+            actualFieldMappings.get(inferenceFieldName),
+            inferenceFieldName
+        );
+        assertThat(inferenceFieldMappings.containsKey("index_options"), is(true));
+        assertThat(inferenceFieldMappings.get("index_options"), nullValue());
+
+        // Create the inference endpoint
+        createInferenceEndpoint(taskType(), inferenceId, FLOAT_SERVICE_SETTINGS);
+
+        // We should now be able to get the default index options
+        final Map<String, Object> expectedFieldMappingWithDefaults = generateExpectedFieldMapping(
+            inferenceFieldName,
+            inferenceId,
+            new ExtendedDenseVectorIndexOptions(null, DenseVectorFieldMapper.ElementType.BFLOAT16)
+        );
+
+        actualFieldMappings = filterNullOrEmptyValues(getFieldMappings(inferenceFieldName, true));
+        assertThat(actualFieldMappings, equalTo(expectedFieldMappingWithDefaults));
+
+        // If we exclude defaults, index options should not be returned
+        final Map<String, Object> expectedFieldMappingWithoutDefaults = generateExpectedFieldMapping(inferenceFieldName, inferenceId, null);
+
+        actualFieldMappings = getFieldMappings(inferenceFieldName, false);
+        assertThat(actualFieldMappings, equalTo(expectedFieldMappingWithoutDefaults));
+    }
+
+    public void testSerializeDefaultToBfloat16WithExplicitType() throws Exception {
+        final String inferenceId = randomIdentifier();
+        final String inferenceFieldName = "inference_field";
+        createInferenceEndpoint(taskType(), inferenceId, FLOAT_SERVICE_SETTINGS);
+
+        DenseVectorFieldMapper.DenseVectorIndexOptions baseIndexOptions = new DenseVectorFieldMapper.Int4HnswIndexOptions(
+            20,
+            90,
+            false,
+            null,
+            -1
+        );
+        assertAcked(
+            safeGet(prepareCreate(INDEX_NAME).setMapping(generateMapping(inferenceFieldName, inferenceId, baseIndexOptions)).execute())
+        );
+
+        final Map<String, Object> expectedFieldMappingWithoutDefaults = generateExpectedFieldMapping(
+            inferenceFieldName,
+            inferenceId,
+            baseIndexOptions
+        );
+        final Map<String, Object> expectedFieldMappingWithDefaults = generateExpectedFieldMapping(
+            inferenceFieldName,
+            inferenceId,
+            new ExtendedDenseVectorIndexOptions(baseIndexOptions, DenseVectorFieldMapper.ElementType.BFLOAT16)
+        );
+
+        // When include_defaults == false, the BFLOAT16 default should not be serialized
+        Map<String, Object> actualFieldMappings = filterNullOrEmptyValues(getFieldMappings(inferenceFieldName, false));
+        assertThat(actualFieldMappings, equalTo(expectedFieldMappingWithoutDefaults));
+
+        // When include_defaults == true, the BFLOAT16 default should be serialized
+        actualFieldMappings = filterNullOrEmptyValues(getFieldMappings(inferenceFieldName, true));
+        assertThat(actualFieldMappings, equalTo(expectedFieldMappingWithDefaults));
+    }
+
+    public void testElementTypeExcludedFromDefaultIndexOptionsWhenNoOverride() throws Exception {
+        final String inferenceId = randomIdentifier();
+        final String inferenceFieldName = "inference_field";
+        createInferenceEndpoint(taskType(), inferenceId, BFLOAT16_SERVICE_SETTINGS);
+        assertAcked(safeGet(prepareCreate(INDEX_NAME).setMapping(generateMapping(inferenceFieldName, inferenceId, null)).execute()));
+
+        // If we didn't default to bfloat16, element_type should be excluded from index options even when include_defaults is true
+        final Map<String, Object> expectedFieldMapping = generateExpectedFieldMapping(inferenceFieldName, inferenceId, null);
+
+        Map<String, Object> actualFieldMappings = filterNullOrEmptyValues(getFieldMappings(inferenceFieldName, true));
+        assertThat(actualFieldMappings, equalTo(expectedFieldMapping));
     }
 }
