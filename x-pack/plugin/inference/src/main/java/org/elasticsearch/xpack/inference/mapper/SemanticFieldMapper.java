@@ -85,6 +85,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.function.BiConsumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 import static org.elasticsearch.inference.TaskType.EMBEDDING;
@@ -267,15 +268,62 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
         }
 
         protected Parameter<SemanticTextIndexOptions> configureIndexOptionsParam() {
+            return buildIndexOptionsParam(SemanticFieldMapper::defaultIndexOptions, SemanticFieldMapper::defaultElementTypeToBfloat16);
+        }
+
+        /**
+         * Builds the {@code index_options} parameter, resolving its serialized value from the current index options,
+         * model settings, and the given hooks so subclasses can express only how they differ:
+         * {@code defaultIndexOptionsResolver} computes the resolved defaults to serialize when no index options are
+         * configured, and {@code bfloat16Resolver} decides whether an unconfigured {@code element_type} should default
+         * to {@code bfloat16} when explicit dense_vector index options are set.
+         */
+        protected Parameter<SemanticTextIndexOptions> buildIndexOptionsParam(
+            Function<MinimalServiceSettings, SemanticTextIndexOptions> defaultIndexOptionsResolver,
+            Predicate<DenseVectorFieldMapper.ElementType> bfloat16Resolver
+        ) {
             return new Parameter<>(
                 INDEX_OPTIONS_FIELD,
                 true,
                 () -> null,
                 (n, c, o) -> parseIndexOptionsFromMap(n, o, c.indexVersionCreated(), experimentalFeaturesEnabled),
                 mapper -> ((SemanticFieldType) mapper.fieldType()).indexOptions,
-                XContentBuilder::field, // TODO: Customize how default index options are serialized
+                (b, n, v) -> {
+                    throw new IllegalStateException("Serializer for [" + INDEX_OPTIONS_FIELD + "] should not be called");
+                },
                 Objects::toString
-            ).acceptsNull();
+            ) {
+                @Override
+                protected void toXContent(XContentBuilder builder, boolean includeDefaults) throws IOException {
+                    SemanticTextIndexOptions value = getValue();
+                    if (includeDefaults || isConfigured()) {
+                        MinimalServiceSettings resolvedModelSettings = getResolvedModelSettings(null, false);
+                        if (value == null) {
+                            // Default value, serialize resolved defaults
+                            value = defaultIndexOptionsResolver.apply(resolvedModelSettings);
+                        } else if (value.type() == SemanticTextIndexOptions.SupportedIndexOptions.DENSE_VECTOR) {
+                            ExtendedDenseVectorIndexOptions innerIndexOptions = getExtendedDenseVectorIndexOptions(value);
+                            DenseVectorFieldMapper.ElementType elementTypeOverride = innerIndexOptions.getElementType();
+                            DenseVectorFieldMapper.DenseVectorIndexOptions dvio = innerIndexOptions.getBaseIndexOptions();
+
+                            if (resolvedModelSettings == null) {
+                                throw new IllegalStateException("Model settings should be resolvable when explicit index options are set");
+                            }
+
+                            if (includeDefaults
+                                && elementTypeOverride == null
+                                && bfloat16Resolver.test(resolvedModelSettings.elementType())) {
+                                value = new SemanticTextIndexOptions(
+                                    SemanticTextIndexOptions.SupportedIndexOptions.DENSE_VECTOR,
+                                    new ExtendedDenseVectorIndexOptions(dvio, DenseVectorFieldMapper.ElementType.BFLOAT16)
+                                );
+                            }
+                        }
+
+                        builder.field(INDEX_OPTIONS_FIELD, value);
+                    }
+                }
+            }.acceptsNull();
         }
 
         protected Parameter<ChunkingSettings> configureChunkingSettingsParam() {
@@ -1152,5 +1200,15 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
 
     private static boolean defaultElementTypeToBfloat16(DenseVectorFieldMapper.ElementType modelElementType) {
         return modelElementType == DenseVectorFieldMapper.ElementType.FLOAT;
+    }
+
+    private static SemanticTextIndexOptions defaultIndexOptions(MinimalServiceSettings modelSettings) {
+        if (modelSettings != null && defaultElementTypeToBfloat16(modelSettings.elementType())) {
+            return new SemanticTextIndexOptions(
+                SemanticTextIndexOptions.SupportedIndexOptions.DENSE_VECTOR,
+                new ExtendedDenseVectorIndexOptions(null, DenseVectorFieldMapper.ElementType.BFLOAT16)
+            );
+        }
+        return null;
     }
 }
