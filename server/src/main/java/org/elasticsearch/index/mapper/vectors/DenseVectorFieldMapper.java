@@ -130,7 +130,6 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
-import java.util.Collections;
 import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -3309,31 +3308,7 @@ public class DenseVectorFieldMapper extends FieldMapper {
             if (format != null) {
                 throw new IllegalArgumentException("Field [" + name() + "] of type [" + typeName() + "] doesn't support formats.");
             }
-            Set<String> sourcePaths = context.isSourceEnabled() ? context.sourcePath(name()) : Collections.emptySet();
-            return new SourceValueFetcher(name(), context) {
-                @Override
-                public List<Object> fetchValues(Source source, int doc, List<Object> ignoredValues) {
-                    ArrayList<Object> values = new ArrayList<>();
-                    for (var path : sourcePaths) {
-                        Object sourceValue = source.extractValue(path, null);
-                        if (sourceValue == null) {
-                            return List.of();
-                        }
-                        switch (sourceValue) {
-                            case List<?> v -> values.addAll(v);
-                            case String s -> values.add(s);
-                            default -> ignoredValues.add(sourceValue);
-                        }
-                    }
-                    values.trimToSize();
-                    return values;
-                }
-
-                @Override
-                protected Object parseSourceValue(Object value) {
-                    throw new IllegalStateException("parsing dense vector from source is not supported here");
-                }
-            };
+            return new OriginalValueDenseVectorValueFetcher(name(), context);
         }
 
         @Override
