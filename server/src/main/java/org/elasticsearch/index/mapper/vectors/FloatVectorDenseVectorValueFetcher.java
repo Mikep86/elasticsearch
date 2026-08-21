@@ -14,11 +14,13 @@ import org.elasticsearch.index.mapper.NumberFieldMapper;
 import org.elasticsearch.index.mapper.SourceValueFetcher;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.ByteElement;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.ElementType;
+import org.elasticsearch.index.query.SearchExecutionContext;
 import org.elasticsearch.search.lookup.Source;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.Collections;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
@@ -32,6 +34,15 @@ class FloatVectorDenseVectorValueFetcher extends SourceValueFetcher {
     private final Set<String> sourcePaths;
     private final ElementType elementType;
     private final int dims;
+
+    FloatVectorDenseVectorValueFetcher(String fieldName, SearchExecutionContext context, ElementType elementType, int dims) {
+        this(
+            context.isSourceEnabled() ? context.sourcePath(fieldName) : Collections.emptySet(),
+            context.getIndexSettings().getIgnoredSourceFormat(),
+            elementType,
+            dims
+        );
+    }
 
     FloatVectorDenseVectorValueFetcher(
         Set<String> sourcePaths,

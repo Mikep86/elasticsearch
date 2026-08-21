@@ -3301,11 +3301,23 @@ public class DenseVectorFieldMapper extends FieldMapper {
 
         @Override
         public ValueFetcher valueFetcher(SearchExecutionContext context, String format) {
-            // TODO add support to `binary` and `vector` formats to unify the formats
-            if (format != null) {
-                throw new IllegalArgumentException("Field [" + name() + "] of type [" + typeName() + "] doesn't support formats.");
-            }
-            return new OriginalValueDenseVectorValueFetcher(name(), context);
+            // TODO add support to the `binary` format to unify the formats
+            return switch (format) {
+                case null -> new OriginalValueDenseVectorValueFetcher(name(), context);
+                case "vector" -> dims == null
+                    // No data has been indexed yet, so there is nothing to decode.
+                    ? ValueFetcher.EMPTY
+                    : new FloatVectorDenseVectorValueFetcher(name(), context, element.elementType(), dims);
+                default -> throw new IllegalArgumentException(
+                    "Field ["
+                        + name()
+                        + "] of type ["
+                        + typeName()
+                        + "] doesn't support format ["
+                        + format
+                        + "]. Supported formats are [vector]."
+                );
+            };
         }
 
         @Override
