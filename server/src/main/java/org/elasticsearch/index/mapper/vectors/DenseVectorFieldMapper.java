@@ -131,6 +131,7 @@ import java.time.ZoneId;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
+import java.util.EnumSet;
 import java.util.HexFormat;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -614,6 +615,20 @@ public class DenseVectorFieldMapper extends FieldMapper {
                 vectorsFormatProviders,
                 indexDisabledByDefault
             );
+        }
+    }
+
+    public enum VectorFormat {
+        ARRAY,
+        BINARY;
+
+        public static Optional<VectorFormat> fromString(String name) {
+            return Arrays.stream(values()).filter(f -> f.toString().equals(name)).findFirst();
+        }
+
+        @Override
+        public String toString() {
+            return name().toLowerCase(Locale.ROOT);
         }
     }
 
@@ -3330,38 +3345,37 @@ public class DenseVectorFieldMapper extends FieldMapper {
         @Override
         public ValueFetcher valueFetcher(SearchExecutionContext context, String format) {
             // TODO add support to `binary` and `vector` formats to unify the formats
-            boolean decodeEncodedVectors = switch (format) {
-                case null -> false;
-                case "array" -> true;
-                default -> throw new IllegalArgumentException(
-                    "Field ["
-                        + name()
-                        + "] of type ["
-                        + typeName()
-                        + "] doesn't support format ["
-                        + format
-                        + "]. Supported formats are [array]."
-                );
-            };
+            boolean decodeEncodedVectors = format != null && parseFormat(format, EnumSet.of(VectorFormat.ARRAY)) == VectorFormat.ARRAY;
             return new DenseVectorSourceValueFetcher(name(), context, element.elementType(), dims, decodeEncodedVectors);
         }
 
         @Override
         public DocValueFormat docValueFormat(String format, ZoneId timeZone) {
-            return switch (format) {
-                case null -> DocValueFormat.DENSE_VECTOR;
-                case "array" -> DocValueFormat.DENSE_VECTOR;
-                case "binary" -> DocValueFormat.BINARY;
-                default -> throw new IllegalArgumentException(
-                    "Field ["
-                        + name()
-                        + "] of type ["
-                        + typeName()
-                        + "] doesn't support format ["
-                        + format
-                        + "]. Supported formats are [array, binary]."
-                );
+            if (format == null) {
+                return DocValueFormat.DENSE_VECTOR;
+            }
+            return switch (parseFormat(format, EnumSet.allOf(VectorFormat.class))) {
+                case ARRAY -> DocValueFormat.DENSE_VECTOR;
+                case BINARY -> DocValueFormat.BINARY;
             };
+        }
+
+        private VectorFormat parseFormat(String format, Set<VectorFormat> supported) {
+            return VectorFormat.fromString(format)
+                .filter(supported::contains)
+                .orElseThrow(
+                    () -> new IllegalArgumentException(
+                        "Field ["
+                            + name()
+                            + "] of type ["
+                            + typeName()
+                            + "] doesn't support format ["
+                            + format
+                            + "]. Supported formats are "
+                            + supported
+                            + "."
+                    )
+                );
         }
 
         @Override
