@@ -14,6 +14,8 @@ import org.elasticsearch.index.mapper.NumberFieldMapper;
 import org.elasticsearch.index.mapper.SourceValueFetcher;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.ElementType;
 import org.elasticsearch.index.query.SearchExecutionContext;
+import org.elasticsearch.logging.LogManager;
+import org.elasticsearch.logging.Logger;
 import org.elasticsearch.search.lookup.Source;
 
 import java.util.ArrayList;
@@ -21,10 +23,13 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 
+import static org.elasticsearch.common.Strings.format;
+
 /**
  * A {@link SourceValueFetcher} for {@code dense_vector} fields.
  */
 class DenseVectorSourceValueFetcher extends SourceValueFetcher {
+    private static final Logger logger = LogManager.getLogger(DenseVectorSourceValueFetcher.class);
 
     private final Set<String> sourcePaths;
     private final ElementType elementType;
@@ -54,71 +59,58 @@ class DenseVectorSourceValueFetcher extends SourceValueFetcher {
             if (sourceValue == null) {
                 continue;
             }
-            if (values != null) {
-                // A dense_vector holds exactly one vector, so the first value found wins. A further value is
-                // only reachable when this field is a copy_to target; report it as ignored rather than
-                // merging it into the vector.
+            try {
+                if (values != null) {
+                    // A dense_vector holds exactly one vector, so the first value found wins. A further
+                    // value is only reachable when this field is the target of a copy_to.
+                    throw new IllegalStateException("a dense_vector holds a single vector and one has already been found");
+                }
+                values = decodeEncodedVectors ? decodedValues(sourceValue) : rawValues(sourceValue);
+            } catch (Exception e) {
+                // if parsing fails here then it would have failed at index time
+                // as well, meaning that we must be ignoring malformed values.
                 ignoredValues.add(sourceValue);
-                continue;
+                logger.debug(() -> format("ignoring dense vector value from source path [%s]", path), e);
             }
-            values = decodeEncodedVectors ? decodedValues(sourceValue, ignoredValues) : rawValues(sourceValue, ignoredValues);
         }
         return values == null ? List.of() : values;
     }
 
     /**
      * Pass-through: returns source values without parsing. Used for {@code format: null}.
-     *
-     * @return the values, or {@code null} if this source value yielded no vector
      */
-    @Nullable
-    private static List<Object> rawValues(Object sourceValue, List<Object> ignoredValues) {
-        switch (sourceValue) {
-            case List<?> v -> {
-                return new ArrayList<>(v);
-            }
-            case String s -> {
-                return List.of(s);
-            }
-            default -> {
-                ignoredValues.add(sourceValue);
-                return null;
-            }
-        }
+    private static List<Object> rawValues(Object sourceValue) {
+        return switch (sourceValue) {
+            case List<?> v -> new ArrayList<>(v);
+            case String s -> List.of(s);
+            default -> throw unsupportedSourceValue(sourceValue);
+        };
     }
 
     /**
      * Normalizes source values to {@code Float}. Used for {@code format: "array"}.
-     *
-     * @return the values, or {@code null} if this source value yielded no vector
      */
-    @Nullable
-    private List<Object> decodedValues(Object sourceValue, List<Object> ignoredValues) {
-        try {
-            switch (sourceValue) {
-                case List<?> v -> {
-                    List<Object> values = new ArrayList<>(v.size());
-                    for (Object o : v) {
-                        values.add(NumberFieldMapper.NumberType.FLOAT.parse(o, false));
-                    }
-                    return values;
+    private List<Object> decodedValues(Object sourceValue) {
+        switch (sourceValue) {
+            case List<?> v -> {
+                List<Object> values = new ArrayList<>(v.size());
+                for (Object o : v) {
+                    values.add(NumberFieldMapper.NumberType.FLOAT.parse(o, false));
                 }
-                case String s -> {
-                    if (dims == null) {
-                        // Dimensions are unknown until the first document is indexed; nothing to decode against.
-                        ignoredValues.add(s);
-                        return null;
-                    }
-                    return DecodedVector.decode(s, elementType, dims).toFloatList();
-                }
-                default -> ignoredValues.add(sourceValue);
+                return values;
             }
-        } catch (Exception e) {
-            // if parsing fails here then it would have failed at index time
-            // as well, meaning that we must be ignoring malformed values.
-            ignoredValues.add(sourceValue);
+            case String s -> {
+                if (dims == null) {
+                    throw new IllegalStateException("dimensions are unknown because no document has been indexed yet");
+                }
+                return DecodedVector.decode(s, elementType, dims).toFloatList();
+            }
+            default -> throw unsupportedSourceValue(sourceValue);
         }
-        return null;
+    }
+
+    private static IllegalArgumentException unsupportedSourceValue(Object sourceValue) {
+        return new IllegalArgumentException("unsupported source value type [" + sourceValue.getClass().getSimpleName() + "]");
     }
 
     @Override
