@@ -13,12 +13,16 @@ import org.elasticsearch.core.Nullable;
 import org.elasticsearch.index.mapper.NumberFieldMapper;
 import org.elasticsearch.index.mapper.SourceValueFetcher;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.ElementType;
+import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.VectorFormat;
 import org.elasticsearch.index.query.SearchExecutionContext;
 import org.elasticsearch.logging.LogManager;
 import org.elasticsearch.logging.Logger;
 import org.elasticsearch.search.lookup.Source;
 
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
@@ -35,20 +39,20 @@ class DenseVectorSourceValueFetcher extends SourceValueFetcher {
     private final ElementType elementType;
     @Nullable
     private final Integer dims;
-    private final boolean decodeEncodedVectors;
+    private final VectorFormat format;
 
     DenseVectorSourceValueFetcher(
         String fieldName,
         SearchExecutionContext context,
         ElementType elementType,
         @Nullable Integer dims,
-        boolean decodeEncodedVectors
+        VectorFormat format
     ) {
         super(fieldName, context);
         this.sourcePaths = context.isSourceEnabled() ? context.sourcePath(fieldName) : Collections.emptySet();
         this.elementType = elementType;
         this.dims = dims;
-        this.decodeEncodedVectors = decodeEncodedVectors;
+        this.format = format;
     }
 
     @Override
@@ -65,7 +69,10 @@ class DenseVectorSourceValueFetcher extends SourceValueFetcher {
                     // value is only reachable when this field is the target of a copy_to.
                     throw new IllegalStateException("a dense_vector holds a single vector and one has already been found");
                 }
-                values = decodeEncodedVectors ? decodedValues(sourceValue) : rawValues(sourceValue);
+                values = switch (format) {
+                    case ARRAY -> arrayValues(sourceValue);
+                    case BINARY -> binaryValues(sourceValue);
+                };
             } catch (Exception e) {
                 // if parsing fails here then it would have failed at index time
                 // as well, meaning that we must be ignoring malformed values.
@@ -77,20 +84,9 @@ class DenseVectorSourceValueFetcher extends SourceValueFetcher {
     }
 
     /**
-     * Pass-through: returns source values without parsing. Used for {@code format: null}.
+     * Decodes source values to a list of {@code Float}. Used for {@code format: "array"}.
      */
-    private static List<Object> rawValues(Object sourceValue) {
-        return switch (sourceValue) {
-            case List<?> v -> new ArrayList<>(v);
-            case String s -> List.of(s);
-            default -> throw unsupportedSourceValue(sourceValue);
-        };
-    }
-
-    /**
-     * Normalizes source values to {@code Float}. Used for {@code format: "array"}.
-     */
-    private List<Object> decodedValues(Object sourceValue) {
+    private List<Object> arrayValues(Object sourceValue) {
         switch (sourceValue) {
             case List<?> v -> {
                 List<Object> values = new ArrayList<>(v.size());
@@ -107,6 +103,49 @@ class DenseVectorSourceValueFetcher extends SourceValueFetcher {
             }
             default -> throw unsupportedSourceValue(sourceValue);
         }
+    }
+
+    /**
+     * Encodes source values as a single-element list containing a base64 string. Used for {@code format: "binary"}.
+     * For {@code bfloat16} element types, each component is widened to 4 bytes (float32) before encoding.
+     */
+    private List<Object> binaryValues(Object sourceValue) {
+        switch (sourceValue) {
+            case List<?> v -> {
+                return List.of(encodeBase64(v, elementType));
+            }
+            case String s -> {
+                if (dims == null) {
+                    throw new IllegalStateException("dimensions are unknown because no document has been indexed yet");
+                }
+                return List.of(DecodedVector.decode(s, elementType, dims).toBase64());
+            }
+            default -> throw unsupportedSourceValue(sourceValue);
+        }
+    }
+
+    /**
+     * Encodes source values as base64 using the canonical binary form for {@code elementType}: one byte per
+     * component for byte and bit vectors, four big-endian bytes otherwise.
+     */
+    private static String encodeBase64(List<?> values, ElementType elementType) {
+        return switch (elementType) {
+            case BYTE, BIT -> {
+                byte[] encoded = new byte[values.size()];
+                int i = 0;
+                for (Object value : values) {
+                    encoded[i++] = NumberFieldMapper.NumberType.BYTE.parse(value, false).byteValue();
+                }
+                yield Base64.getEncoder().encodeToString(encoded);
+            }
+            case FLOAT, BFLOAT16 -> {
+                ByteBuffer buffer = ByteBuffer.allocate(values.size() * Float.BYTES).order(ByteOrder.BIG_ENDIAN);
+                for (Object value : values) {
+                    buffer.putFloat(NumberFieldMapper.NumberType.FLOAT.parse(value, false).floatValue());
+                }
+                yield Base64.getEncoder().encodeToString(buffer.array());
+            }
+        };
     }
 
     private static IllegalArgumentException unsupportedSourceValue(Object sourceValue) {

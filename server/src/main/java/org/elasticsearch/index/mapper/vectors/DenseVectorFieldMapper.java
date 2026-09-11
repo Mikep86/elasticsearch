@@ -3344,9 +3344,8 @@ public class DenseVectorFieldMapper extends FieldMapper {
 
         @Override
         public ValueFetcher valueFetcher(SearchExecutionContext context, String format) {
-            // TODO add support to `binary` and `vector` formats to unify the formats
-            boolean decodeEncodedVectors = format != null && parseFormat(format, EnumSet.of(VectorFormat.ARRAY)) == VectorFormat.ARRAY;
-            return new DenseVectorSourceValueFetcher(name(), context, element.elementType(), dims, decodeEncodedVectors);
+            VectorFormat vectorFormat = format == null ? VectorFormat.ARRAY : parseFormat(format, EnumSet.allOf(VectorFormat.class));
+            return new DenseVectorSourceValueFetcher(name(), context, element.elementType(), dims, vectorFormat);
         }
 
         @Override

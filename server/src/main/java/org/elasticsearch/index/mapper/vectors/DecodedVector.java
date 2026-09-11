@@ -140,6 +140,22 @@ public final class DecodedVector {
         return values;
     }
 
+    /**
+     * Returns the canonical base64 encoding of this vector. For byte and float32 vectors, the raw bytes are encoded
+     * directly. For bfloat16 vectors, each component is widened to a 4-byte big-endian float before encoding,
+     * so the result is always 4 bytes per component regardless of the original storage format.
+     */
+    public String toBase64() {
+        return switch (layout) {
+            case BYTES, FLOAT32 -> Base64.getEncoder().encodeToString(bytes);
+            case BFLOAT16 -> {
+                ByteBuffer buffer = ByteBuffer.allocate(componentCount() * Float.BYTES).order(ByteOrder.BIG_ENDIAN);
+                buffer.asFloatBuffer().put(toFloatArray());
+                yield Base64.getEncoder().encodeToString(buffer.array());
+            }
+        };
+    }
+
     private int componentCount() {
         return switch (layout) {
             case BYTES -> bytes.length;
