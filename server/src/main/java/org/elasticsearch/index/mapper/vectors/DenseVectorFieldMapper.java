@@ -3330,10 +3330,20 @@ public class DenseVectorFieldMapper extends FieldMapper {
         @Override
         public ValueFetcher valueFetcher(SearchExecutionContext context, String format) {
             // TODO add support to `binary` and `vector` formats to unify the formats
-            if (format != null) {
-                throw new IllegalArgumentException("Field [" + name() + "] of type [" + typeName() + "] doesn't support formats.");
-            }
-            return new DenseVectorSourceValueFetcher(name(), context);
+            boolean decodeEncodedVectors = switch (format) {
+                case null -> false;
+                case "array" -> true;
+                default -> throw new IllegalArgumentException(
+                    "Field ["
+                        + name()
+                        + "] of type ["
+                        + typeName()
+                        + "] doesn't support format ["
+                        + format
+                        + "]. Supported formats are [array]."
+                );
+            };
+            return new DenseVectorSourceValueFetcher(name(), context, element.elementType(), dims, decodeEncodedVectors);
         }
 
         @Override
