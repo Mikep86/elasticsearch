@@ -25,20 +25,28 @@ import java.util.List;
 public final class DecodedVector {
 
     /**
-     * How the decoded bytes should be read as vector components.
+     * Which array backs this vector and how its contents are read as components.
      */
     private enum Layout {
         BYTES,
-        FLOAT32,
-        BFLOAT16
+        ENCODED_FLOATS,
+        DECODED_FLOATS
     }
 
     private final byte[] bytes;
+    private final float[] floats;
     private final Layout layout;
 
     private DecodedVector(byte[] bytes, Layout layout) {
         this.bytes = bytes;
+        this.floats = null;
         this.layout = layout;
+    }
+
+    private DecodedVector(float[] floats) {
+        this.bytes = null;
+        this.floats = floats;
+        this.layout = Layout.DECODED_FLOATS;
     }
 
     /**
@@ -71,7 +79,12 @@ public final class DecodedVector {
 
         // Try base64 if it matches expected dimensions for the element type
         if (base64Bytes != null && matchesExpectedBase64Length(base64Bytes.length, elementType, dims)) {
-            return new DecodedVector(base64Bytes, layoutFor(elementType, base64Bytes.length, dims));
+            if (elementType == ElementType.BFLOAT16 && base64Bytes.length == dims * BFloat16.BYTES) {
+                float[] widened = new float[dims];
+                BFloat16.bFloat16ToFloat(base64Bytes, 0, widened, 0, dims, ByteOrder.BIG_ENDIAN);
+                return new DecodedVector(widened);
+            }
+            return new DecodedVector(base64Bytes, layoutFor(elementType));
         }
 
         // Hex decoded cleanly but doesn't match the expected dimensions
@@ -101,17 +114,21 @@ public final class DecodedVector {
     }
 
     public float[] toFloatArray() {
-        float[] values = new float[componentCount()];
-        switch (layout) {
+        return switch (layout) {
             case BYTES -> {
+                float[] values = new float[componentCount()];
                 for (int i = 0; i < values.length; i++) {
                     values[i] = bytes[i];
                 }
+                yield values;
             }
-            case FLOAT32 -> ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN).asFloatBuffer().get(values);
-            case BFLOAT16 -> BFloat16.bFloat16ToFloat(ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN), values);
-        }
-        return values;
+            case ENCODED_FLOATS -> {
+                float[] values = new float[componentCount()];
+                ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN).asFloatBuffer().get(values);
+                yield values;
+            }
+            case DECODED_FLOATS -> floats;
+        };
     }
 
     public List<Object> toFloatList() {
@@ -122,18 +139,16 @@ public final class DecodedVector {
                     values.add((float) b);
                 }
             }
-            case FLOAT32 -> {
+            case ENCODED_FLOATS -> {
                 ByteBuffer buffer = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN);
                 int count = bytes.length / Float.BYTES;
                 for (int i = 0; i < count; i++) {
                     values.add(buffer.getFloat());
                 }
             }
-            case BFLOAT16 -> {
-                ByteBuffer buffer = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN);
-                int count = bytes.length / BFloat16.BYTES;
-                for (int i = 0; i < count; i++) {
-                    values.add(BFloat16.bFloat16ToFloat(buffer.getShort()));
+            case DECODED_FLOATS -> {
+                for (float f : floats) {
+                    values.add(f);
                 }
             }
         }
@@ -141,16 +156,15 @@ public final class DecodedVector {
     }
 
     /**
-     * Returns the canonical base64 encoding of this vector. For byte and float32 vectors, the raw bytes are encoded
-     * directly. For bfloat16 vectors, each component is widened to a 4-byte big-endian float before encoding,
-     * so the result is always 4 bytes per component regardless of the original storage format.
+     * Returns the base64 encoding of this vector, one byte per component for byte vectors and four big-endian
+     * bytes per component otherwise.
      */
     public String toBase64() {
         return switch (layout) {
-            case BYTES, FLOAT32 -> Base64.getEncoder().encodeToString(bytes);
-            case BFLOAT16 -> {
-                ByteBuffer buffer = ByteBuffer.allocate(componentCount() * Float.BYTES).order(ByteOrder.BIG_ENDIAN);
-                buffer.asFloatBuffer().put(toFloatArray());
+            case BYTES, ENCODED_FLOATS -> Base64.getEncoder().encodeToString(bytes);
+            case DECODED_FLOATS -> {
+                ByteBuffer buffer = ByteBuffer.allocate(floats.length * Float.BYTES).order(ByteOrder.BIG_ENDIAN);
+                buffer.asFloatBuffer().put(floats);
                 yield Base64.getEncoder().encodeToString(buffer.array());
             }
         };
@@ -159,17 +173,15 @@ public final class DecodedVector {
     private int componentCount() {
         return switch (layout) {
             case BYTES -> bytes.length;
-            case FLOAT32 -> bytes.length / Float.BYTES;
-            case BFLOAT16 -> bytes.length / BFloat16.BYTES;
+            case ENCODED_FLOATS -> bytes.length / Float.BYTES;
+            case DECODED_FLOATS -> floats.length;
         };
     }
 
-    private static Layout layoutFor(ElementType elementType, int length, int dims) {
+    private static Layout layoutFor(ElementType elementType) {
         return switch (elementType) {
             case BYTE, BIT -> Layout.BYTES;
-            case FLOAT -> Layout.FLOAT32;
-            // Prefer bfloat16 if it matches exactly, otherwise float
-            case BFLOAT16 -> length == dims * BFloat16.BYTES ? Layout.BFLOAT16 : Layout.FLOAT32;
+            case FLOAT, BFLOAT16 -> Layout.ENCODED_FLOATS;
         };
     }
 
