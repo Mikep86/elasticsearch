@@ -13,6 +13,7 @@ import com.carrotsearch.randomizedtesting.annotations.ParametersFactory;
 import org.apache.lucene.util.SetOnce;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchResponse;
+import org.elasticsearch.action.support.IndicesOptions;
 import org.elasticsearch.core.TimeValue;
 import org.elasticsearch.index.IndexNotFoundException;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper;
@@ -80,37 +81,60 @@ public class MissingRemoteIndexCrossClusterSearchIT extends AbstractSemanticCros
     }
 
     /**
-     * Verifies that a missing remote index is tolerated when {@code skip_unavailable} is true, and rejected when it is false, for every
-     * request mode (minimize_roundtrips on, minimize_roundtrips off, scroll) and every query type that triggers remote inference.
+     * Verifies the missing-remote-index behavior for every request mode (minimize_roundtrips on, minimize_roundtrips off, scroll) and
+     * every query type that triggers remote inference.
      */
     public void testMissingRemoteIndex() throws Exception {
-        for (QueryCase queryCase : buildQueryCases()) {
-            minimizeRoundTripsTrueTestCase(queryCase);
-            minimizeRoundTripsFalseTestCase(queryCase);
-            scrollTestCase(queryCase);
+        for (int i = 0; i < 20; i++) {
+            final IndicesOptions indicesOptions = randomIndicesOptions();
+            for (QueryCase queryCase : buildQueryCases()) {
+                minimizeRoundTripsTrueTestCase(queryCase, indicesOptions);
+                minimizeRoundTripsFalseTestCase(queryCase, indicesOptions);
+                scrollTestCase(queryCase, indicesOptions);
+            }
         }
     }
 
-    private void minimizeRoundTripsTrueTestCase(QueryCase queryCase) throws Exception {
-        assertMissingRemoteIndex(queryCase, s -> s.setCcsMinimizeRoundtrips(true), LOCAL_CLUSTER);
+    private void minimizeRoundTripsTrueTestCase(QueryCase queryCase, IndicesOptions indicesOptions) throws Exception {
+        assertMissingRemoteIndex(queryCase, indicesOptions, s -> s.setCcsMinimizeRoundtrips(true), LOCAL_CLUSTER);
     }
 
-    private void minimizeRoundTripsFalseTestCase(QueryCase queryCase) throws Exception {
-        assertMissingRemoteIndex(queryCase, s -> s.setCcsMinimizeRoundtrips(false), null);
+    private void minimizeRoundTripsFalseTestCase(QueryCase queryCase, IndicesOptions indicesOptions) throws Exception {
+        assertMissingRemoteIndex(queryCase, indicesOptions, s -> s.setCcsMinimizeRoundtrips(false), null);
     }
 
-    private void scrollTestCase(QueryCase queryCase) throws Exception {
+    private void scrollTestCase(QueryCase queryCase, IndicesOptions indicesOptions) throws Exception {
         // Scroll implicitly sets ccs_minimize_roundtrips to false — this exercises the same lookup path as minimize_roundtrips=false.
-        assertMissingRemoteIndex(queryCase, s -> s.scroll(TimeValue.timeValueMinutes(1)), null);
+        assertMissingRemoteIndex(queryCase, indicesOptions, s -> s.scroll(TimeValue.timeValueMinutes(1)), null);
     }
 
-    private void assertMissingRemoteIndex(QueryCase queryCase, Consumer<SearchRequest> modifier, String expectedLocalClusterAlias)
-        throws Exception {
+    private void assertMissingRemoteIndex(
+        QueryCase queryCase,
+        IndicesOptions indicesOptions,
+        Consumer<SearchRequest> modifier,
+        String expectedLocalClusterAlias
+    ) throws Exception {
         final List<String> indices = List.of(LOCAL_INDEX_NAME, fullyQualifiedIndexName(REMOTE_CLUSTER, MISSING_INDEX_NAME));
+        final Consumer<SearchRequest> modifierWithOptions = modifier.andThen(s -> s.indicesOptions(indicesOptions));
 
+        // The remote cluster resolves the missing index as a concrete expression:
+        // - ignoreUnavailable == false → IndexNotFoundException
+        // - ignoreUnavailable == true, allowNoIndices == false → empty result set → IndexNotFoundException (notFoundException)
+        // - ignoreUnavailable == true, allowNoIndices == true → zero shards, no error
+        final boolean remoteFails = indicesOptions.ignoreUnavailable() == false || indicesOptions.allowNoIndices() == false;
         final SetOnce<String> scrollId = new SetOnce<>();
         try {
-            if (skipUnavailable) {
+            if (remoteFails == false) {
+                // The remote cluster silently contributes zero shards — both clusters report SUCCESSFUL.
+                assertSearchResponse(
+                    queryCase.query(),
+                    indices,
+                    List.of(new SearchResult(expectedLocalClusterAlias, LOCAL_INDEX_NAME, queryCase.expectedDocId())),
+                    null,
+                    modifierWithOptions,
+                    r -> scrollId.set(r.getScrollId())
+                );
+            } else if (skipUnavailable) {
                 assertSearchResponse(
                     queryCase.query(),
                     indices,
@@ -119,11 +143,11 @@ public class MissingRemoteIndexCrossClusterSearchIT extends AbstractSemanticCros
                         SearchResponse.Cluster.Status.SKIPPED,
                         Set.of(new FailureCause(IndexNotFoundException.class, MISSING_INDEX_ERROR))
                     ),
-                    modifier,
+                    modifierWithOptions,
                     r -> scrollId.set(r.getScrollId())
                 );
             } else {
-                assertSearchFailure(queryCase.query(), indices, IndexNotFoundException.class, MISSING_INDEX_ERROR, modifier);
+                assertSearchFailure(queryCase.query(), indices, IndexNotFoundException.class, MISSING_INDEX_ERROR, modifierWithOptions);
             }
         } finally {
             if (scrollId.get() != null) {
@@ -132,7 +156,21 @@ public class MissingRemoteIndexCrossClusterSearchIT extends AbstractSemanticCros
         }
     }
 
-    private List<QueryCase> buildQueryCases() {
+    private static IndicesOptions randomIndicesOptions() {
+        return IndicesOptions.fromOptions(
+            randomBoolean(), // ignoreUnavailable
+            randomBoolean(), // allowNoIndices
+            randomBoolean(), // expandToOpenIndices
+            randomBoolean(), // expandToClosedIndices
+            randomBoolean(), // expandToHiddenIndices
+            randomBoolean(), // allowAliasesToMultipleIndices
+            randomBoolean(), // forbidClosedIndices
+            randomBoolean(), // ignoreAliases
+            randomBoolean()  // ignoreThrottled
+        );
+    }
+
+    private static List<QueryCase> buildQueryCases() {
         return List.of(
             new QueryCase(
                 new KnnVectorQueryBuilder(
