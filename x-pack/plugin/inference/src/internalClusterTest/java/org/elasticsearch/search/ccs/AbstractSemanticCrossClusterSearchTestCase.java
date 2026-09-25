@@ -201,6 +201,17 @@ public abstract class AbstractSemanticCrossClusterSearchTestCase extends Abstrac
         @Nullable ClusterFailure expectedRemoteFailure,
         @Nullable Consumer<SearchRequest> searchRequestModifier
     ) throws Exception {
+        assertSearchResponse(queryBuilder, indices, expectedSearchResults, expectedRemoteFailure, searchRequestModifier, null);
+    }
+
+    protected void assertSearchResponse(
+        QueryBuilder queryBuilder,
+        @Nullable List<String> indices,
+        List<SearchResult> expectedSearchResults,
+        @Nullable ClusterFailure expectedRemoteFailure,
+        @Nullable Consumer<SearchRequest> searchRequestModifier,
+        @Nullable Consumer<SearchResponse> responseAssertions
+    ) throws Exception {
         QueryBuilder boostedQueryBuilder = boostLocalIndex(queryBuilder);
         SearchSourceBuilder searchSourceBuilder = new SearchSourceBuilder().query(boostedQueryBuilder).size(expectedSearchResults.size());
         SearchRequest searchRequest = new SearchRequest().source(searchSourceBuilder);
@@ -212,6 +223,10 @@ public abstract class AbstractSemanticCrossClusterSearchTestCase extends Abstrac
         }
 
         assertResponse(client().search(searchRequest), response -> {
+            if (responseAssertions != null) {
+                responseAssertions.accept(response);
+            }
+
             SearchHit[] hits = response.getHits().getHits();
             assertThat(hits.length, equalTo(expectedSearchResults.size()));
 
