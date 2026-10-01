@@ -54,6 +54,7 @@ public class MappingParserContext {
     private final RootObjectMapperNamespaceValidator namespaceValidator;
     private final Supplier<ProjectMetadata> projectMetadataSupplier;
     private final ParseFieldLimits parseFieldLimits;
+    private final MapperService.MergeReason mergeReason;
 
     // Package-private: used by MapperService (to pass ParseFieldLimits directly) and by inner subcontexts.
     MappingParserContext(
@@ -71,7 +72,8 @@ public class MappingParserContext {
         List<VectorsFormatProvider> vectorsFormatProviders,
         RootObjectMapperNamespaceValidator namespaceValidator,
         Supplier<ProjectMetadata> projectMetadataSupplier,
-        ParseFieldLimits parseFieldLimits
+        ParseFieldLimits parseFieldLimits,
+        MapperService.MergeReason mergeReason
     ) {
         this.similarityLookupService = similarityLookupService;
         this.typeParsers = typeParsers;
@@ -89,6 +91,7 @@ public class MappingParserContext {
         this.namespaceValidator = namespaceValidator;
         this.projectMetadataSupplier = projectMetadataSupplier;
         this.parseFieldLimits = parseFieldLimits;
+        this.mergeReason = mergeReason;
     }
 
     public MappingParserContext(
@@ -127,7 +130,8 @@ public class MappingParserContext {
                 indexSettings.getMappingNestedFieldsLimit(),
                 NewFieldsBudget.unlimited(),
                 0
-            )
+            ),
+            MapperService.MergeReason.MAPPING_UPDATE
         );
     }
 
@@ -306,6 +310,10 @@ public class MappingParserContext {
         return new MultiFieldParserContext(this);
     }
 
+    public MapperService.MergeReason getMergeReason() {
+        return mergeReason;
+    }
+
     public Supplier<ProjectMetadata> getProjectMetadata() {
         return projectMetadataSupplier;
     }
@@ -328,7 +336,8 @@ public class MappingParserContext {
                 in.vectorsFormatProviders,
                 in.namespaceValidator,
                 null,
-                in.parseFieldLimits
+                in.parseFieldLimits,
+                in.mergeReason
             );
         }
 
@@ -363,7 +372,8 @@ public class MappingParserContext {
                 in.namespaceValidator,
                 null,
                 // Use UNLIMITED so that parsing a dynamic template definition does not count against field limits.
-                ParseFieldLimits.UNLIMITED
+                ParseFieldLimits.UNLIMITED,
+                in.mergeReason
             );
             this.dateFormatter = dateFormatter;
         }
