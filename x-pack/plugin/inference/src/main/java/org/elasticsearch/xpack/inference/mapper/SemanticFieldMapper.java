@@ -35,6 +35,7 @@ import org.elasticsearch.index.mapper.BlockSourceReader;
 import org.elasticsearch.index.mapper.CompositeSyntheticFieldLoader;
 import org.elasticsearch.index.mapper.DocumentParserContext;
 import org.elasticsearch.index.mapper.DocumentParsingException;
+import org.elasticsearch.index.mapper.ExplicitMappingUpdateContext;
 import org.elasticsearch.index.mapper.FieldMapper;
 import org.elasticsearch.index.mapper.IndexType;
 import org.elasticsearch.index.mapper.InferenceFieldMapper;
@@ -721,6 +722,25 @@ public class SemanticFieldMapper extends FieldMapper implements InferenceFieldMa
                     contentType() + " field [" + fullPath() + "] cannot be in an object field with subobjects disabled"
                 );
             }
+        }
+    }
+
+    @Override
+    protected void doValidateExplicitUpdate(ExplicitMappingUpdateContext context) {
+        FieldMapper embeddingsField = fieldType().getEmbeddingsField();
+        if (embeddingsField == null) {
+            return;
+        }
+        try {
+            embeddingsField.validateExplicitUpdate(context);
+        } catch (IllegalArgumentException e) {
+            String errorMessage = e.getMessage() != null
+                ? e.getMessage().replace(SemanticTextField.getEmbeddingsFieldName(fullPath()), fullPath())
+                : "";
+            throw new IllegalArgumentException(
+                "Invalid [" + INDEX_OPTIONS_FIELD + "] for " + contentType() + " field [" + fullPath() + "]: " + errorMessage,
+                e
+            );
         }
     }
 

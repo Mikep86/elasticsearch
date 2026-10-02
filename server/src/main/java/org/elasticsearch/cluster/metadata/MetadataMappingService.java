@@ -187,7 +187,12 @@ public class MetadataMappingService {
                 CompressedXContent existingSource = mapperService.documentMapper() != null
                     ? mapperService.documentMapper().mappingSource()
                     : null;
-                DocumentMapper mergedMapper = mapperService.merge(MapperService.SINGLE_MAPPING_NAME, request.source(), reason);
+                DocumentMapper mergedMapper = mapperService.merge(
+                    MapperService.SINGLE_MAPPING_NAME,
+                    request.source(),
+                    reason,
+                    request.autoUpdate() == false
+                );
                 CompressedXContent updatedSource = mergedMapper.mappingSource();
                 // If the mapping source is the same after merging, then we have no real update, so we skip modifying this index.
                 if (updatedSource.equals(existingSource)) {
@@ -316,7 +321,12 @@ public class MetadataMappingService {
             // checks to ensure the cached result is only used if the circumstances are the same (e.g., no changes to the index settings).
             try (MapperService mapperService = indicesService.createIndexMapperServiceForValidation(indexMetadata)) {
                 mapperService.merge(indexMetadata, MergeReason.MAPPING_RECOVERY);
-                DocumentMapper mergedMapper = mapperService.merge(MapperService.SINGLE_MAPPING_NAME, request.source(), reason);
+                DocumentMapper mergedMapper = mapperService.merge(
+                    MapperService.SINGLE_MAPPING_NAME,
+                    request.source(),
+                    reason,
+                    request.autoUpdate() == false
+                );
                 CompressedXContent updatedSource = mergedMapper.mappingSource();
                 if (updatedSource.equals(mappingMetadata.source()) == false) {
                     return false;

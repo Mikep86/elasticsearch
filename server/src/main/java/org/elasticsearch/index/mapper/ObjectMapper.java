@@ -968,6 +968,13 @@ public class ObjectMapper extends Mapper {
     }
 
     @Override
+    public void validateExplicitUpdate(ExplicitMappingUpdateContext context) {
+        for (Mapper mapper : this.mappers.values()) {
+            mapper.validateExplicitUpdate(context);
+        }
+    }
+
+    @Override
     public XContentBuilder toXContent(XContentBuilder builder, Params params) throws IOException {
         toXContent(builder, params, null);
         return builder;

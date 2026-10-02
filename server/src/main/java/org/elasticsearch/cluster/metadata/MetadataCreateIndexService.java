@@ -1835,6 +1835,8 @@ public class MetadataCreateIndexService {
             allMappings.add(defaultMapping);
         }
         allMappings.addAll(mappings);
+        // TODO: pass explicitUpdate = true for user-requested index creation (not auto-create or rollover, see request.cause()) so that
+        // indices created with an older index version during a rolling upgrade are also validated by Mapper#validateExplicitUpdate
         mapperService.merge(MapperService.SINGLE_MAPPING_NAME, allMappings, MergeReason.INDEX_TEMPLATE);
 
         indexMode.validateTimestampFieldMapping(request.dataStreamName() != null, mapperService.mappingLookup());

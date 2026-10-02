@@ -782,4 +782,49 @@ public class RootObjectMapper extends ObjectMapper {
         }
         super.validateSubField(mapper, mappers);
     }
+
+    /**
+     * Also validates a sample mapper for each dynamic template, so that templates are held to the same rules as concrete fields.
+     */
+    @Override
+    public void validateExplicitUpdate(ExplicitMappingUpdateContext context) {
+        super.validateExplicitUpdate(context);
+        MappingParserContext templateParserContext = context.parserContext().createDynamicTemplateContext(null);
+        for (DynamicTemplate template : dynamicTemplates.value()) {
+            Mapper templateMapper = buildDynamicTemplateMapper(templateParserContext, template);
+            if (templateMapper == null) {
+                continue;
+            }
+            try {
+                templateMapper.validateExplicitUpdate(context);
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException("dynamic template [" + template.name() + "]: " + e.getMessage(), e);
+            }
+        }
+    }
+
+    /**
+     * Builds a sample mapper for a dynamic template, or returns {@code null} if the template is a runtime template, uses the
+     * {@code {name}} placeholder, or can't be built for any of its mapping types.
+     */
+    private static Mapper buildDynamicTemplateMapper(MappingParserContext parserContext, DynamicTemplate template) {
+        if (template.isRuntimeMapping() || containsSnippet(template.getMapping(), "{name}")) {
+            return null;
+        }
+        String templateName = "__dynamic__" + template.name();
+        for (XContentFieldType fieldType : template.getXContentFieldTypes()) {
+            String dynamicType = fieldType.defaultMappingType();
+            Mapper.TypeParser typeParser = parserContext.typeParser(template.mappingType(dynamicType));
+            if (typeParser == null) {
+                continue;
+            }
+            try {
+                return typeParser.parse(templateName, template.mappingForName(templateName, dynamicType), parserContext)
+                    .build(MapperBuilderContext.root(false, false));
+            } catch (Exception e) {
+                // Templates are validated when parsed, so a mapping type that the template can't be built with is skipped
+            }
+        }
+        return null;
+    }
 }

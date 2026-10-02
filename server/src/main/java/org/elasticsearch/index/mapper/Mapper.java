@@ -324,6 +324,12 @@ public abstract class Mapper implements ToXContentFragment, Iterable<Mapper> {
      */
     public abstract void validate(MappingLookup mappers);
 
+    /**
+     * Validate this mapper after an explicit, user-initiated mapping update. Unlike {@link #validate(MappingLookup)}, this is not
+     * called on mapping recovery or dynamic mapping updates, so it can reject configurations that must remain loadable.
+     */
+    public void validateExplicitUpdate(ExplicitMappingUpdateContext context) {}
+
     @Override
     public String toString() {
         return Strings.toString(this);

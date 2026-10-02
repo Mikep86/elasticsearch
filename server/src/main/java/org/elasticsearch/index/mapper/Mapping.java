@@ -144,6 +144,14 @@ public final class Mapping implements ToXContentFragment {
         root.validate(mappers);
     }
 
+    // TODO: Necessary?
+    void validateExplicitUpdate(ExplicitMappingUpdateContext context) {
+        for (MetadataFieldMapper metadataFieldMapper : metadataMappers) {
+            metadataFieldMapper.validateExplicitUpdate(context);
+        }
+        root.validateExplicitUpdate(context);
+    }
+
     /**
      * Returns a {@link SourceLoader.SyntheticVectorsLoader} that loads synthetic vector values
      * from a source document, optionally applying a {@link SourceFilter}.

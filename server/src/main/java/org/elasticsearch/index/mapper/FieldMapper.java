@@ -635,6 +635,16 @@ public abstract class FieldMapper extends Mapper {
 
     protected void doValidate(MappingLookup mappers) {}
 
+    @Override
+    public final void validateExplicitUpdate(ExplicitMappingUpdateContext context) {
+        for (Mapper multiField : multiFields().mappers) {
+            multiField.validateExplicitUpdate(context);
+        }
+        doValidateExplicitUpdate(context);
+    }
+
+    protected void doValidateExplicitUpdate(ExplicitMappingUpdateContext context) {}
+
     private static void checkNestedScopeCompatibility(String source, String target) {
         boolean targetIsParentOfSource;
         if (source == null || target == null) {

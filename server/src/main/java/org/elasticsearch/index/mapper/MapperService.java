@@ -448,6 +448,16 @@ public class MapperService extends AbstractIndexComponent implements Closeable {
      * merge, where parsing is done only when all raw mapping settings are already merged.
      */
     public DocumentMapper merge(String type, List<CompressedXContent> mappingSources, MergeReason reason) {
+        return merge(type, mappingSources, reason, false);
+    }
+
+    /**
+     * Like {@link #merge(String, List, MergeReason)}.
+     *
+     * @param explicitUpdate whether the merge is an explicit, user-initiated mapping update, in which case
+     *                       {@link Mapper#validateExplicitUpdate} is run on the merged mapping if it changed
+     */
+    public DocumentMapper merge(String type, List<CompressedXContent> mappingSources, MergeReason reason, boolean explicitUpdate) {
         final DocumentMapper currentMapper = this.mapper;
         if (currentMapper != null && mappingSources.size() == 1 && currentMapper.mappingSource().equals(mappingSources.get(0))) {
             return currentMapper;
@@ -475,7 +485,7 @@ public class MapperService extends AbstractIndexComponent implements Closeable {
         if (mergedRawMapping != null && mergedRawMapping.size() > 1) {
             throw new MapperParsingException("cannot merge mapping sources with different roots");
         }
-        return (mergedRawMapping != null) ? doMerge(type, reason, mergedRawMapping) : null;
+        return (mergedRawMapping != null) ? doMerge(type, reason, mergedRawMapping, explicitUpdate) : null;
     }
 
     /**
@@ -582,12 +592,22 @@ public class MapperService extends AbstractIndexComponent implements Closeable {
     }
 
     public DocumentMapper merge(String type, CompressedXContent mappingSource, MergeReason reason) {
+        return merge(type, mappingSource, reason, false);
+    }
+
+    /**
+     * Like {@link #merge(String, CompressedXContent, MergeReason)}.
+     *
+     * @param explicitUpdate whether the merge is an explicit, user-initiated mapping update, in which case
+     *                       {@link Mapper#validateExplicitUpdate} is run on the merged mapping if it changed
+     */
+    public DocumentMapper merge(String type, CompressedXContent mappingSource, MergeReason reason, boolean explicitUpdate) {
         final DocumentMapper currentMapper = this.mapper;
         if (currentMapper != null && currentMapper.mappingSource().equals(mappingSource)) {
             return currentMapper;
         }
         Map<String, Object> mappingSourceAsMap = MappingParser.convertToMap(mappingSource);
-        return doMerge(type, reason, mappingSourceAsMap);
+        return doMerge(type, reason, mappingSourceAsMap, explicitUpdate);
     }
 
     /**
@@ -613,7 +633,7 @@ public class MapperService extends AbstractIndexComponent implements Closeable {
         return mappingParser.parseToBuilder(SINGLE_MAPPING_NAME, MergeReason.MAPPING_UPDATE, MappingParser.convertToMap(mappingSource));
     }
 
-    private DocumentMapper doMerge(String type, MergeReason reason, Map<String, Object> mappingSourceAsMap) {
+    private DocumentMapper doMerge(String type, MergeReason reason, Map<String, Object> mappingSourceAsMap, boolean explicitUpdate) {
         assert reason != MergeReason.MAPPING_AUTO_UPDATE_PREFLIGHT;
         MappingBuilder incomingBuilder;
         try {
@@ -625,7 +645,16 @@ public class MapperService extends AbstractIndexComponent implements Closeable {
         // TODO: can we even have concurrent updates here?
         synchronized (this) {
             Mapping mapping = mergeBuilders(incomingBuilder, reason);
-            DocumentMapper newMapper = newDocumentMapper(mapping, reason, mapping.toCompressedXContent());
+            CompressedXContent mergedSource = mapping.toCompressedXContent();
+            DocumentMapper newMapper = newDocumentMapper(mapping, reason, mergedSource);
+
+            // Validate before replacing the current mapper so that a rejected update leaves this mapper service unchanged
+            if (explicitUpdate && (this.mapper == null || mergedSource.equals(this.mapper.mappingSource()) == false)) {
+                mapping.validateExplicitUpdate(
+                    new ExplicitMappingUpdateContext(newMapper.mappers(), mappingParserContextSupplier.apply(reason))
+                );
+            }
+
             this.mapper = newMapper;
             assert assertSerialization(newMapper, reason);
             return newMapper;

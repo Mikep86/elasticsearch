@@ -72,6 +72,7 @@ import org.elasticsearch.index.fielddata.IndexFieldData;
 import org.elasticsearch.index.mapper.BlockLoader;
 import org.elasticsearch.index.mapper.BlockSourceReader;
 import org.elasticsearch.index.mapper.DocumentParserContext;
+import org.elasticsearch.index.mapper.ExplicitMappingUpdateContext;
 import org.elasticsearch.index.mapper.FieldMapper;
 import org.elasticsearch.index.mapper.IndexType;
 import org.elasticsearch.index.mapper.MappedFieldType;
@@ -3048,6 +3049,13 @@ public class DenseVectorFieldMapper extends FieldMapper {
             this.quantizationType = quantizationType;
         }
 
+        /**
+         * Whether {@code auto_calibrate} is enabled but has no effect because the index predates auto-calibration support.
+         */
+        boolean isAutoCalibrateIgnored() {
+            return autoCalibrate && indexVersionCreated.before(IndexVersions.DISK_BBQ_ES950_AUTO_CALIBRATE);
+        }
+
         @Override
         KnnVectorsFormat getVectorsFormat(ElementType elementType, ExecutorService mergingExecutorService, int numMergeWorkers) {
             return getVectorsFormat(elementType, mergingExecutorService, numMergeWorkers, null);
@@ -4197,6 +4205,19 @@ public class DenseVectorFieldMapper extends FieldMapper {
     @Override
     public DenseVectorFieldType fieldType() {
         return (DenseVectorFieldType) super.fieldType();
+    }
+
+    @Override
+    protected void doValidateExplicitUpdate(ExplicitMappingUpdateContext context) {
+        if (fieldType().getIndexOptions() instanceof BBQIVFIndexOptions bbqIndexOptions && bbqIndexOptions.isAutoCalibrateIgnored()) {
+            throw new IllegalArgumentException(
+                "[auto_calibrate] is not supported on field ["
+                    + fullPath()
+                    + "] for indices created before ["
+                    + IndexVersions.DISK_BBQ_ES950_AUTO_CALIBRATE.toReleaseVersion()
+                    + "], set [auto_calibrate] to [false]"
+            );
+        }
     }
 
     @Override
