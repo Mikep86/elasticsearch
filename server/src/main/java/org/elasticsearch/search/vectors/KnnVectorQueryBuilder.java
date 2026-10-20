@@ -530,53 +530,21 @@ public class KnnVectorQueryBuilder extends LeafQueryBuilder<KnnVectorQueryBuilde
                 "[" + NAME + "] queries are only supported on [" + DenseVectorFieldMapper.CONTENT_TYPE + "] fields"
             );
         }
+
         DenseVectorFieldType vectorFieldType = (DenseVectorFieldType) fieldType;
-
-        List<Query> filtersInitial = doFiltersToQuery(context);
-        Query aliasFilter = buildAliasFilterQuery(context);
-
         String parentPath = context.nestedLookup().getNestedParent(fieldName);
         BitSetProducer parentBitSet = null;
         Query filterQuery;
         if (parentPath == null) {
-            if (aliasFilter != null) {
-                filtersInitial.add(aliasFilter);
-            }
-            filterQuery = buildFilterQuery(filtersInitial);
+            List<LeveledFilter> filters = doFiltersToQuery(context, null, null);
+            filterQuery = buildFilterQuery(filters.stream().map(LeveledFilter::query).toList());
         } else {
-            final Query parentFilter;
-            NestedObjectMapper originalObjectMapper = context.nestedScope().getObjectMapper();
-            if (originalObjectMapper != null) {
-                try {
-                    // we are in a nested context, to get the parent filter we need to go up one level
-                    context.nestedScope().previousLevel();
-                    NestedObjectMapper objectMapper = context.nestedScope().getObjectMapper();
-                    parentFilter = objectMapper == null
-                        ? Queries.newNonNestedFilter(context.indexVersionCreated())
-                        : objectMapper.nestedTypeFilter();
-                } finally {
-                    context.nestedScope().nextLevel(originalObjectMapper);
-                }
-            } else {
-                // we are NOT in a nested context, coming from the top level knn search
-                parentFilter = Queries.newNonNestedFilter(context.indexVersionCreated());
-            }
-            parentBitSet = context.bitsetFilter(parentFilter);
-            List<Query> filterAdjusted = new ArrayList<>(filtersInitial.size());
-            for (Query f : filtersInitial) {
-                // If filter matches non-nested docs, we assume this is a filter over parents docs,
-                // so we will modify it accordingly: matching parents docs with join to its child docs
-                if (NestedHelper.mightMatchNonNestedDocs(f, parentPath, context)) {
-                    // Ensure that the query only returns parent documents matching filter
-                    f = Queries.filtered(f, parentFilter);
-                    f = new ToChildBlockJoinQuery(f, parentBitSet);
-                }
-                filterAdjusted.add(f);
-            }
-            if (aliasFilter != null) {
-                // Alias filters match root documents, so join them from the root level, not the immediate parent.
-                Query nonNested = Queries.newNonNestedFilter(context.indexVersionCreated());
-                filterAdjusted.add(new ToChildBlockJoinQuery(Queries.filtered(aliasFilter, nonNested), context.bitsetFilter(nonNested)));
+            NestedObjectMapper parentLevel = levelAboveField(context, parentPath);
+            parentBitSet = context.bitsetFilter(nestedLevelFilter(parentLevel, context));
+            List<LeveledFilter> filters = doFiltersToQuery(context, parentPath, parentLevel);
+            List<Query> filterAdjusted = new ArrayList<>(filters.size());
+            for (LeveledFilter f : filters) {
+                filterAdjusted.add(joinToFieldLevel(f, parentPath, context));
             }
             filterQuery = buildFilterQuery(filterAdjusted);
         }
@@ -603,35 +571,85 @@ public class KnnVectorQueryBuilder extends LeafQueryBuilder<KnnVectorQueryBuilde
         );
     }
 
-    private List<Query> doFiltersToQuery(SearchExecutionContext context) throws IOException {
-        final List<Query> autoPrefilters = applyAutoPrefilteringIfEnabled(context);
-        final List<Query> allFilters = new ArrayList<>(
+    /**
+     * Builds all filters that apply to this knn query, each tagged with the nested level it targets.
+     *
+     * @param fieldNestedPath the nested path of the queried field, or {@code null} if the field is not nested
+     * @param userFilterLevel the level user-supplied filters target when they are not filters on the field's nested documents
+     */
+    private List<LeveledFilter> doFiltersToQuery(
+        SearchExecutionContext context,
+        @Nullable String fieldNestedPath,
+        @Nullable NestedObjectMapper userFilterLevel
+    ) throws IOException {
+        final List<LeveledFilter> autoPrefilters = applyAutoPrefilteringIfEnabled(context);
+        final List<LeveledFilter> allFilters = new ArrayList<>(
             filterQueries.size() + autoPrefilters.size() + (context.getAliasFilter() == null ? 0 : 1)
         );
 
         allFilters.addAll(autoPrefilters);
         for (QueryBuilder queryBuilder : filterQueries) {
-            allFilters.add(queryBuilder.toQuery(context));
+            Query query = queryBuilder.toQuery(context);
+            NestedObjectMapper level = userFilterLevel;
+            if (fieldNestedPath != null && NestedHelper.mightMatchNonNestedDocs(query, fieldNestedPath, context) == false) {
+                // A filter that can only match the field's nested documents is a filter on nested metadata, so it applies directly
+                level = context.nestedLookup().getNestedMappers().get(fieldNestedPath);
+            }
+            allFilters.add(new LeveledFilter(query, level));
+        }
+        if (context.getAliasFilter() != null) {
+            allFilters.add(new LeveledFilter(buildAliasFilterQuery(context), null));
         }
         return allFilters;
     }
 
     private static Query buildAliasFilterQuery(SearchExecutionContext context) throws IOException {
-        if (context.getAliasFilter() == null) {
-            return null;
-        }
-
         // Alias filters target root documents, so they must not be built in this knn query's nested scope.
         try (Releasable ignored = context.nestedScope().unwindTo(null)) {
             return context.getAliasFilter().toQuery(context);
         }
     }
 
-    private List<Query> applyAutoPrefilteringIfEnabled(SearchExecutionContext context) throws IOException {
+    /**
+     * Returns the nested level this knn query sits at before entering the nested level of the queried field. This is the level
+     * whose documents the knn results are joined to, so it is also the level user-supplied filters target.
+     */
+    @Nullable
+    private static NestedObjectMapper levelAboveField(SearchExecutionContext context, String fieldNestedPath) {
+        NestedObjectMapper current = context.nestedScope().getObjectMapper();
+        if (current == null || current.fullPath().equals(fieldNestedPath) == false) {
+            return current;
+        }
+        context.nestedScope().previousLevel();
+        try {
+            return context.nestedScope().getObjectMapper();
+        } finally {
+            context.nestedScope().nextLevel(current);
+        }
+    }
+
+    private static Query nestedLevelFilter(@Nullable NestedObjectMapper level, SearchExecutionContext context) {
+        return level == null ? Queries.newNonNestedFilter(context.indexVersionCreated()) : level.nestedTypeFilter();
+    }
+
+    /**
+     * Joins a filter from the level it targets down to the nested documents of the queried field.
+     */
+    private static Query joinToFieldLevel(LeveledFilter filter, String fieldNestedPath, SearchExecutionContext context) {
+        if (filter.level() != null && filter.level().fullPath().equals(fieldNestedPath)) {
+            return filter.query();
+        }
+
+        // ToChildBlockJoinQuery requires the parent query to only match documents at the parent level
+        Query levelFilter = nestedLevelFilter(filter.level(), context);
+        return new ToChildBlockJoinQuery(Queries.filtered(filter.query(), levelFilter), context.bitsetFilter(levelFilter));
+    }
+
+    private List<LeveledFilter> applyAutoPrefilteringIfEnabled(SearchExecutionContext context) throws IOException {
         if (isAutoPrefilteringEnabled == false) {
             return List.of();
         }
-        final List<Query> autoPrefilters = new ArrayList<>();
+        final List<LeveledFilter> autoPrefilters = new ArrayList<>();
         for (ScopedPrefilter scopedPrefilter : context.autoPrefilteringScope().getPrefilters()) {
             if (this == scopedPrefilter.query()) {
                 continue;
@@ -644,14 +662,14 @@ public class KnnVectorQueryBuilder extends LeafQueryBuilder<KnnVectorQueryBuilde
                 // A prefilter is meant to be evaluated in the document space of the query that collected it, which may
                 // sit above this knn query's nested level. Building it here without unwinding would give block join
                 // queries - such as an exists query on a semantic_text field - a child level as their parent filter,
-                // leaving the prefilter matching nothing. The filters are joined down to child documents in doToQuery.
+                // leaving the prefilter matching nothing. The prefilter is joined down from that level in doToQuery.
                 // Auto-prefiltering is suspended while building the prefilter query so that knn queries contained in it do not cause
                 // infinite recursion (see https://github.com/elastic/elasticsearch/issues/162295)
                 try (
                     Releasable ignored = context.nestedScope().unwindTo(scopedPrefilter.nestedLevel());
                     AutoPrefilteringScope suspended = context.autoPrefilteringScope().suspend()
                 ) {
-                    autoPrefilters.add(pruned.get().toQuery(context));
+                    autoPrefilters.add(new LeveledFilter(pruned.get().toQuery(context), scopedPrefilter.nestedLevel()));
                 }
             }
         }
@@ -709,4 +727,9 @@ public class KnnVectorQueryBuilder extends LeafQueryBuilder<KnnVectorQueryBuilde
         this.isAutoPrefilteringEnabled = isAutoPrefilteringEnabled;
         return this;
     }
+
+    /**
+     * A filter together with the nested level whose documents it matches. A {@code null} level means root documents.
+     */
+    private record LeveledFilter(Query query, @Nullable NestedObjectMapper level) {}
 }
