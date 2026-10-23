@@ -24,8 +24,7 @@ import java.util.Objects;
 
 /**
  * Returns the documents of the current nested level whose ancestor matches the provided query, the ancestor being at the
- * level of the fields the query reads (see {@link NestedHelper#joinToNestedLevel}). Used internally by the inner hits of knn
- * queries and not exposed to users.
+ * level of the fields the query reads (see {@link NestedHelper#joinToNestedLevel}). Used internally and not exposed to users.
  */
 public class ToChildBlockJoinQueryBuilder extends LeafQueryBuilder<ToChildBlockJoinQueryBuilder> {
     public static final String NAME = "to_child_block_join";
