@@ -38,7 +38,7 @@ import static org.hamcrest.Matchers.sameInstance;
 /**
  * Tests the analyzer built by {@link IndexShard#buildIndexAnalyzer} when token count metrics are enabled. The index
  * analyzers count how often they create {@link Analyzer.TokenStreamComponents}, which shows whether analysis chains
- * are reused per analyzer (expected) or per field.
+ * are reused per analyzer across fields and shards (expected) or per field.
  */
 public class TokenCountingIndexAnalyzerTests extends MapperServiceTestCase {
 
@@ -110,20 +110,25 @@ public class TokenCountingIndexAnalyzerTests extends MapperServiceTestCase {
     }
 
     /**
-     * A mapping update discards the wrappers so that analyzers that are no longer mapped are not retained. The
-     * chains are rebuilt once per analyzer and thread, and shared across fields again afterwards.
+     * Shards using the same analyzer share its chain, and the chain survives a mapping update while another shard
+     * still uses the analyzer. Whether it survives with no other user depends on GC, so that case isn't asserted.
      */
-    public void testMappingUpdateRebuildsComponents() throws IOException {
-        MapperService mapperService = createMapperService(mapping(b -> b.startObject("a").field("type", "text").endObject()));
-        Analyzer analyzer = buildIndexAnalyzer(mapperService);
+    public void testSharesComponentsAcrossShardsAndMappingUpdates() throws IOException {
+        TokenCountingMetrics metrics = newMetrics();
+        MapperService first = createMapperService(mapping(b -> b.startObject("a").field("type", "text").endObject()));
+        MapperService second = createMapperService(mapping(b -> b.startObject("a").field("type", "text").endObject()));
+        Analyzer firstAnalyzer = buildIndexAnalyzer(first, metrics);
+        Analyzer secondAnalyzer = buildIndexAnalyzer(second, metrics);
 
-        TokenStream before = consume(analyzer, "a", "one two");
-        merge(mapperService, mapping(b -> b.startObject("b").field("type", "text").endObject()));
-        TokenStream after = consume(analyzer, "a", "one two");
+        TokenStream before = consume(firstAnalyzer, "a", "one two");
+        assertThat(consume(secondAnalyzer, "a", "one two"), sameInstance(before));
 
-        assertThat(after, not(sameInstance(before)));
-        assertThat(consume(analyzer, "b", "one two"), sameInstance(after));
-        assertThat(defaultAnalyzer.created.get(), equalTo(2));
+        merge(first, mapping(b -> b.startObject("b").field("type", "text").endObject()));
+        assertThat(consume(firstAnalyzer, "a", "one two"), sameInstance(before));
+        assertThat(consume(firstAnalyzer, "b", "one two"), sameInstance(before));
+        // Using the second shard last keeps it, and so the shared wrapper, strongly reachable until here.
+        assertThat(consume(secondAnalyzer, "a", "one two"), sameInstance(before));
+        assertThat(defaultAnalyzer.created.get(), equalTo(1));
     }
 
     public void testDoesNotCountCompletionFields() throws IOException {
@@ -204,9 +209,16 @@ public class TokenCountingIndexAnalyzerTests extends MapperServiceTestCase {
         }
     }
 
-    private Analyzer buildIndexAnalyzer(MapperService mapperService) {
+    private TokenCountingMetrics newMetrics() {
         Settings settings = Settings.builder().put(Environment.PATH_HOME_SETTING.getKey(), createTempDir()).build();
-        TokenCountingMetrics metrics = new TokenCountingMetrics(telemetryPlugin.getTelemetryProvider(settings).getMeterRegistry());
+        return new TokenCountingMetrics(telemetryPlugin.getTelemetryProvider(settings).getMeterRegistry());
+    }
+
+    private Analyzer buildIndexAnalyzer(MapperService mapperService) {
+        return buildIndexAnalyzer(mapperService, newMetrics());
+    }
+
+    private Analyzer buildIndexAnalyzer(MapperService mapperService, TokenCountingMetrics metrics) {
         Analyzer analyzer = IndexShard.buildIndexAnalyzer(mapperService, metrics);
         assertThat(analyzer, instanceOf(TokenCountingIndexAnalyzer.class));
         return analyzer;
