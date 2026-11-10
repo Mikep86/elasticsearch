@@ -190,7 +190,6 @@ public class InterceptedInferenceMultiMatchQueryBuilder extends InterceptedInfer
             .operator(originalQuery.operator())
             .analyzer(originalQuery.analyzer())
             .slop(originalQuery.slop())
-            .fuzziness(originalQuery.fuzziness())
             .prefixLength(originalQuery.prefixLength())
             .maxExpansions(originalQuery.maxExpansions())
             .minimumShouldMatch(originalQuery.minimumShouldMatch())
@@ -200,6 +199,11 @@ public class InterceptedInferenceMultiMatchQueryBuilder extends InterceptedInfer
             .zeroTermsQuery(originalQuery.zeroTermsQuery())
             .autoGenerateSynonymsPhraseQuery(originalQuery.autoGenerateSynonymsPhraseQuery())
             .fuzzyTranspositions(originalQuery.fuzzyTranspositions());
+
+        // fuzziness is null unless set explicitly, and its setter rejects null
+        if (originalQuery.fuzziness() != null) {
+            lexical.fuzziness(originalQuery.fuzziness());
+        }
         return lexical;
     }
 }
