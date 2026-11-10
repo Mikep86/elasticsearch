@@ -327,6 +327,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
     private final AtomicReference<Translog.Location> pendingRefreshLocation = new AtomicReference<>();
     private final RefreshPendingLocationListener refreshPendingLocationListener;
     private final RefreshFieldHasValueListener refreshFieldHasValueListener;
+    private final BayesianBM25ShardEstimator bayesianBM25ShardEstimator;
     private volatile boolean useRetentionLeasesInPeerRecovery;
     private final LongSupplier relativeTimeInNanosSupplier;
     private volatile long startedRelativeTimeInNanos = -1L; // use -1 to indicate this has not yet been set to its true value
@@ -477,6 +478,9 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         this.useRetentionLeasesInPeerRecovery = replicationTracker.hasAllPeerRecoveryRetentionLeases();
         this.refreshPendingLocationListener = new RefreshPendingLocationListener();
         this.refreshFieldHasValueListener = new RefreshFieldHasValueListener();
+        this.bayesianBM25ShardEstimator = IndexSettings.BAYESIAN_BM25_ESTIMATE_ON_MERGE.get(indexSettings.getSettings())
+            ? new BayesianBM25ShardEstimator(shardId, this::getEngine, mapperService, threadPool.generic())
+            : null;
         this.relativeTimeInNanosSupplier = relativeTimeInNanosSupplier;
         this.indexCommitListener = indexCommitListener;
         this.mergeMetrics = mergeMetrics;
@@ -4183,7 +4187,7 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
             .queryCachingPolicy(cachingPolicy)
             .translogConfig(translogConfig)
             .flushMergesAfter(IndexingMemoryController.SHARD_INACTIVE_TIME_SETTING.get(indexSettings.getSettings()))
-            .externalRefreshListener(List.of(refreshListeners, refreshPendingLocationListener, refreshFieldHasValueListener))
+            .externalRefreshListener(externalRefreshListeners())
             .internalRefreshListener(List.of(new RefreshMetricUpdater(refreshMetric), new RefreshShardFieldStatsListener()))
             .indexSort(indexSort)
             .circuitBreakerService(circuitBreakerService)
@@ -4200,6 +4204,22 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
             .mergeMetrics(mergeMetrics)
             .indexDeletionPolicyWrapper(Function.identity())
             .build();
+    }
+
+    private List<ReferenceManager.RefreshListener> externalRefreshListeners() {
+        if (bayesianBM25ShardEstimator == null) {
+            return List.of(refreshListeners, refreshPendingLocationListener, refreshFieldHasValueListener);
+        }
+        return List.of(refreshListeners, refreshPendingLocationListener, refreshFieldHasValueListener, bayesianBM25ShardEstimator);
+    }
+
+    /**
+     * Returns the Bayesian BM25 parameters estimated for the full-text fields of this shard, or {@code null} if none have been estimated
+     * yet or estimation is disabled.
+     */
+    @Nullable
+    public BayesianBM25ShardParameters getBayesianBM25Parameters() {
+        return bayesianBM25ShardEstimator == null ? null : bayesianBM25ShardEstimator.parameters();
     }
 
     /**

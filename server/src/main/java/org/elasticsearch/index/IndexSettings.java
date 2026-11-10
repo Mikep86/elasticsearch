@@ -1221,6 +1221,13 @@ public final class IndexSettings {
         Property.IndexSettingDeprecatedInV7AndRemovedInV8
     );
 
+    public static final Setting<Boolean> BAYESIAN_BM25_ESTIMATE_ON_MERGE = Setting.boolSetting(
+        "index.bayesian_bm25.estimate_on_merge",
+        true,
+        Property.IndexScope,
+        Property.Final
+    );
+
     public static final Setting<Boolean> USE_ES_812_POSTINGS_FORMAT = Setting.boolSetting("index.use_legacy_postings_format", settings -> {
         if (settings == null) {
             return Boolean.FALSE.toString();
