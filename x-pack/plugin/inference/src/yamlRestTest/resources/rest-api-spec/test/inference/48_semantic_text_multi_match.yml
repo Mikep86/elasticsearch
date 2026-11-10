@@ -1,0 +1,204 @@
+setup:
+  - requires:
+      cluster_features: "search.semantic_multi_match_query_rewrite_interception_supported"
+      reason: semantic_text multi_match support
+
+  - do:
+      inference.put:
+        task_type: sparse_embedding
+        inference_id: sparse-inference-id
+        body: >
+          {
+            "service": "test_service",
+            "service_settings": {
+              "model": "my_model",
+              "api_key": "abc64"
+            },
+            "task_settings": {
+            }
+          }
+
+  - do:
+      inference.put:
+        task_type: text_embedding
+        inference_id: dense-inference-id
+        body: >
+          {
+            "service": "text_embedding_test_service",
+            "service_settings": {
+              "model": "my_model",
+              "dimensions": 10,
+              "api_key": "abc64",
+              "similarity": "COSINE"
+            },
+            "task_settings": {
+            }
+          }
+
+  - do:
+      indices.create:
+        index: test-sparse-index
+        body:
+          mappings:
+            properties:
+              inference_field:
+                type: semantic_text
+                inference_id: sparse-inference-id
+              non_inference_field:
+                type: text
+
+  - do:
+      indices.create:
+        index: test-dense-index
+        body:
+          mappings:
+            properties:
+              inference_field:
+                type: semantic_text
+                inference_id: dense-inference-id
+              non_inference_field:
+                type: text
+
+---
+"Query semantic_text and text fields using a sparse embedding model":
+  # doc_1 can only match through the semantic query, doc_2 can only match lexically
+  - do:
+      index:
+        index: test-sparse-index
+        id: doc_1
+        body:
+          inference_field: "It was a beautiful game"
+          non_inference_field: "unrelated"
+        refresh: true
+
+  - do:
+      index:
+        index: test-sparse-index
+        id: doc_2
+        body:
+          non_inference_field: "soccer"
+        refresh: true
+
+  - do:
+      search:
+        index: test-sparse-index
+        body:
+          query:
+            multi_match:
+              query: "soccer"
+              fields: [ "inference_field", "non_inference_field" ]
+
+  - match: { hits.total.value: 2 }
+
+  - do:
+      search:
+        index: test-sparse-index
+        body:
+          query:
+            multi_match:
+              query: "soccer"
+              type: most_fields
+              fields: [ "inference_field", "non_inference_field" ]
+
+  - match: { hits.total.value: 2 }
+
+  # Without the semantic_text field, only the lexical match is found
+  - do:
+      search:
+        index: test-sparse-index
+        body:
+          query:
+            multi_match:
+              query: "soccer"
+              fields: [ "non_inference_field" ]
+
+  - match: { hits.total.value: 1 }
+  - match: { hits.hits.0._id: "doc_2" }
+
+---
+"Query semantic_text and text fields using a dense embedding model":
+  - do:
+      index:
+        index: test-dense-index
+        id: doc_1
+        body:
+          inference_field: "It was a beautiful game"
+          non_inference_field: "unrelated"
+        refresh: true
+
+  - do:
+      index:
+        index: test-dense-index
+        id: doc_2
+        body:
+          non_inference_field: "soccer"
+        refresh: true
+
+  - do:
+      search:
+        index: test-dense-index
+        body:
+          query:
+            multi_match:
+              query: "soccer"
+              fields: [ "inference_field", "non_inference_field" ]
+
+  - match: { hits.total.value: 2 }
+
+---
+"Query using field wildcards":
+  - do:
+      index:
+        index: test-sparse-index
+        id: doc_1
+        body:
+          inference_field: "It was a beautiful game"
+          non_inference_field: "unrelated"
+        refresh: true
+
+  - do:
+      index:
+        index: test-sparse-index
+        id: doc_2
+        body:
+          non_inference_field: "soccer"
+        refresh: true
+
+  - do:
+      search:
+        index: test-sparse-index
+        body:
+          query:
+            multi_match:
+              query: "soccer"
+              fields: [ "*_field" ]
+
+  - match: { hits.total.value: 2 }
+
+---
+"Unsupported multi_match types are rejected for semantic_text fields":
+  - do:
+      catch: bad_request
+      search:
+        index: test-sparse-index
+        body:
+          query:
+            multi_match:
+              query: "soccer"
+              type: cross_fields
+              fields: [ "inference_field", "non_inference_field" ]
+
+  - match: { error.root_cause.0.reason: "/.*\\[cross_fields\\]\\sis\\snot\\ssupported\\swhen\\squerying\\ssemantic_text\\sfields.*/" }
+
+  - do:
+      catch: bad_request
+      search:
+        index: test-sparse-index
+        body:
+          query:
+            multi_match:
+              query: "soccer"
+              type: bayesian
+              fields: [ "inference_field", "non_inference_field" ]
+
+  - match: { error.root_cause.0.reason: "/.*\\[bayesian\\]\\sis\\snot\\ssupported\\swhen\\squerying\\ssemantic_text\\sfields.*/" }
