@@ -830,6 +830,10 @@ public class IndexService extends AbstractIndexComponent implements IndicesClust
             shardSearchStats
         );
         context.setFieldVisibilityPredicate(fieldFilter.apply(index().getName()));
+        final IndexShard shard = getShardOrNull(shardId);
+        if (shard != null) {
+            context.setBayesianBM25ParametersSupplier(shard::getBayesianBM25Parameters);
+        }
         return context;
     }
 

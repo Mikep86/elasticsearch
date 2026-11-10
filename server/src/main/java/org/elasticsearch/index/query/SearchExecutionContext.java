@@ -62,6 +62,7 @@ import org.elasticsearch.index.query.support.AutoPrefilteringScope;
 import org.elasticsearch.index.query.support.NestedScope;
 import org.elasticsearch.index.search.QueryParserHelper;
 import org.elasticsearch.index.search.stats.ShardSearchStats;
+import org.elasticsearch.index.shard.BayesianBM25ShardParameters;
 import org.elasticsearch.index.similarity.SimilarityService;
 import org.elasticsearch.logging.LogManager;
 import org.elasticsearch.logging.Logger;
@@ -156,6 +157,7 @@ public class SearchExecutionContext extends QueryRewriteContext {
     private final Set<Query> preChargedQueries = Collections.synchronizedSet(Collections.newSetFromMap(new IdentityHashMap<>()));
     private final ConcurrentMap<AutomatonKey, SharedAutomaton> sharedAutomata = new ConcurrentHashMap<>();
     private final List<Releasable> queryConstructionReleasables = new ArrayList<>();
+    private Supplier<BayesianBM25ShardParameters> bayesianBM25Parameters = () -> null;
 
     public SearchExecutionContext(
         int shardId,
@@ -251,6 +253,7 @@ public class SearchExecutionContext extends QueryRewriteContext {
         );
         this.sliceSelection = source.sliceSelection;
         this.fieldVisibilityPredicate = source.fieldVisibilityPredicate;
+        this.bayesianBM25Parameters = source.bayesianBM25Parameters;
     }
 
     private SearchExecutionContext(
@@ -769,6 +772,18 @@ public class SearchExecutionContext extends QueryRewriteContext {
      */
     public int getShardId() {
         return shardId;
+    }
+
+    public void setBayesianBM25ParametersSupplier(Supplier<BayesianBM25ShardParameters> supplier) {
+        this.bayesianBM25Parameters = Objects.requireNonNull(supplier);
+    }
+
+    /**
+     * Returns the Bayesian BM25 parameters estimated for this shard, or {@code null} if there are none.
+     */
+    @Nullable
+    public BayesianBM25ShardParameters getBayesianBM25Parameters() {
+        return bayesianBM25Parameters.get();
     }
 
     /**

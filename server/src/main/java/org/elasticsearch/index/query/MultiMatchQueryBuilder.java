@@ -12,6 +12,7 @@ package org.elasticsearch.index.query;
 import org.apache.lucene.search.FuzzyQuery;
 import org.apache.lucene.search.Query;
 import org.elasticsearch.ElasticsearchParseException;
+import org.elasticsearch.ElasticsearchStatusException;
 import org.elasticsearch.TransportVersion;
 import org.elasticsearch.common.ParsingException;
 import org.elasticsearch.common.Strings;
@@ -24,6 +25,7 @@ import org.elasticsearch.index.query.support.QueryParsers;
 import org.elasticsearch.index.search.MatchQueryParser;
 import org.elasticsearch.index.search.MultiMatchQueryParser;
 import org.elasticsearch.index.search.QueryParserHelper;
+import org.elasticsearch.rest.RestStatus;
 import org.elasticsearch.search.internal.MaxClauseCountQueryVisitor;
 import org.elasticsearch.xcontent.DeprecationHandler;
 import org.elasticsearch.xcontent.ParseField;
@@ -88,6 +90,8 @@ public final class MultiMatchQueryBuilder extends AbstractQueryBuilder<MultiMatc
     private boolean autoGenerateSynonymsPhraseQuery = true;
     private boolean fuzzyTranspositions = DEFAULT_FUZZY_TRANSPOSITIONS;
 
+    private static final TransportVersion MULTI_MATCH_BAYESIAN_TYPE = TransportVersion.fromName("multi_match_bayesian_type");
+
     public enum Type implements Writeable {
 
         /**
@@ -124,7 +128,13 @@ public final class MultiMatchQueryBuilder extends AbstractQueryBuilder<MultiMatc
         /**
          * Uses the sum of the matching boolean fields to score the query
          */
-        BOOL_PREFIX(MatchQueryParser.Type.BOOLEAN_PREFIX, 1.0f, new ParseField("bool_prefix"));
+        BOOL_PREFIX(MatchQueryParser.Type.BOOLEAN_PREFIX, 1.0f, new ParseField("bool_prefix")),
+
+        /**
+         * Calibrates each field's BM25 score into a probability using the shard's estimated Bayesian BM25 parameters
+         * and fuses the fields by log-odds
+         */
+        BAYESIAN(MatchQueryParser.Type.BOOLEAN, 0.0f, new ParseField("bayesian"));
 
         private final MatchQueryParser.Type matchQueryType;
         private final float tieBreaker;
@@ -169,6 +179,13 @@ public final class MultiMatchQueryBuilder extends AbstractQueryBuilder<MultiMatc
 
         @Override
         public void writeTo(StreamOutput out) throws IOException {
+            if (this == BAYESIAN && out.getTransportVersion().supports(MULTI_MATCH_BAYESIAN_TYPE) == false) {
+                throw new ElasticsearchStatusException(
+                    "[multi_match] type [bayesian] is not supported by nodes on transport version [{}]",
+                    RestStatus.BAD_REQUEST,
+                    out.getTransportVersion()
+                );
+            }
             out.writeVInt(this.ordinal());
         }
     }

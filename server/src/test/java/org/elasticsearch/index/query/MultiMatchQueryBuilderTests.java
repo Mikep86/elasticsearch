@@ -90,11 +90,11 @@ public class MultiMatchQueryBuilderTests extends AbstractQueryTestCase<MultiMatc
         // sets other parameters of the multi match query
         if (randomBoolean()) {
             if (fieldName.equals(TEXT_FIELD_NAME) || fieldName.equals(TEXT_ALIAS_FIELD_NAME) || fieldName.equals(KEYWORD_FIELD_NAME)) {
-                query.type(randomFrom(MultiMatchQueryBuilder.Type.values()));
+                query.type(randomValueOtherThan(Type.BAYESIAN, () -> randomFrom(MultiMatchQueryBuilder.Type.values())));
             } else {
                 query.type(
                     randomValueOtherThanMany(
-                        (type) -> type == Type.PHRASE_PREFIX || type == Type.BOOL_PREFIX,
+                        (type) -> type == Type.PHRASE_PREFIX || type == Type.BOOL_PREFIX || type == Type.BAYESIAN,
                         () -> randomFrom(MultiMatchQueryBuilder.Type.values())
                     )
                 );

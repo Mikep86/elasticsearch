@@ -12,9 +12,12 @@ package org.elasticsearch.index.search;
 import org.apache.lucene.analysis.Analyzer;
 import org.apache.lucene.analysis.TokenStream;
 import org.apache.lucene.index.Term;
+import org.apache.lucene.search.BayesianScoreEstimator;
+import org.apache.lucene.search.BayesianScoreQuery;
 import org.apache.lucene.search.BooleanClause;
 import org.apache.lucene.search.BoostQuery;
 import org.apache.lucene.search.DisjunctionMaxQuery;
+import org.apache.lucene.search.LogOddsFusionQuery;
 import org.apache.lucene.search.MatchNoDocsQuery;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.QueryVisitor;
@@ -25,7 +28,9 @@ import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.TextFamilyFieldType;
 import org.elasticsearch.index.query.AbstractQueryBuilder;
 import org.elasticsearch.index.query.MultiMatchQueryBuilder;
+import org.elasticsearch.index.query.QueryShardException;
 import org.elasticsearch.index.query.SearchExecutionContext;
+import org.elasticsearch.index.shard.BayesianBM25ShardParameters;
 import org.elasticsearch.lucene.queries.BlendedTermQuery;
 
 import java.io.IOException;
@@ -39,6 +44,9 @@ import java.util.Objects;
 import static org.elasticsearch.common.lucene.search.Queries.newLenientFieldQuery;
 
 public class MultiMatchQueryParser extends MatchQueryParser {
+
+    /** Confidence scaling exponent for the log-odds fusion of the [bayesian] type: the sqrt(n) law. */
+    private static final float FUSION_ALPHA = 0.5f;
 
     private Float groupTieBreaker = null;
 
@@ -59,6 +67,11 @@ public class MultiMatchQueryParser extends MatchQueryParser {
             query.visit(queryVisitor);
             return query;
         }
+
+        if (type == MultiMatchQueryBuilder.Type.BAYESIAN) {
+            return buildBayesianQuery(fieldNames, value, minimumShouldMatch);
+        }
+
         final float tieBreaker = groupTieBreaker == null ? type.tieBreaker() : groupTieBreaker;
         final List<Query> queries = switch (type) {
             case PHRASE, PHRASE_PREFIX, BEST_FIELDS, MOST_FIELDS, BOOL_PREFIX -> buildFieldQueries(
@@ -68,6 +81,7 @@ public class MultiMatchQueryParser extends MatchQueryParser {
                 minimumShouldMatch
             );
             case CROSS_FIELDS -> buildCrossFieldQuery(fieldNames, value, minimumShouldMatch, tieBreaker);
+            case BAYESIAN -> throw new IllegalStateException("[bayesian] is built by buildBayesianQuery");
         };
         return combineGrouped(queries, tieBreaker);
     }
@@ -105,6 +119,67 @@ public class MultiMatchQueryParser extends MatchQueryParser {
             }
         }
         return queries;
+    }
+
+    private Query buildBayesianQuery(Map<String, Float> fieldNames, Object value, String minimumShouldMatch) throws IOException {
+        final BayesianBM25ShardParameters shardParameters = context.getBayesianBM25Parameters();
+        final List<Query> clauses = new ArrayList<>();
+        final List<Float> boosts = new ArrayList<>();
+
+        for (Map.Entry<String, Float> entry : fieldNames.entrySet()) {
+            String fieldName = entry.getKey();
+            if (context.getFieldType(fieldName) == null) {
+                // ignore unmapped fields
+                continue;
+            }
+
+            Query query = parse(MatchQueryParser.Type.BOOLEAN, fieldName, value);
+            query = Queries.maybeApplyMinimumShouldMatch(query, minimumShouldMatch);
+            if (query == null || query instanceof MatchNoDocsQuery) {
+                continue;
+            }
+
+            BayesianScoreEstimator.Parameters parameters = shardParameters == null ? null : shardParameters.get(fieldName);
+            if (parameters == null) {
+                throw new QueryShardException(
+                    context,
+                    "[multi_match] type [bayesian] has no Bayesian BM25 parameters for field ["
+                        + fieldName
+                        + "] on this shard; only full-text fields are estimated, after their first merge"
+                );
+            }
+
+            clauses.add(new BayesianScoreQuery(query, parameters.alpha(), parameters.beta(), parameters.baseRate()));
+            boosts.add(entry.getValue() == null ? AbstractQueryBuilder.DEFAULT_BOOST : entry.getValue());
+        }
+
+        if (clauses.isEmpty()) {
+            return zeroTermsQuery.asQuery();
+        }
+        if (clauses.size() == 1) {
+            return clauses.get(0);
+        }
+        return new LogOddsFusionQuery(clauses, FUSION_ALPHA, fusionWeights(boosts));
+    }
+
+    /** Normalizes the field boosts into fusion weights that sum to one, or {@code null} if every field is weighted equally. */
+    private static float[] fusionWeights(List<Float> boosts) {
+        float sum = 0;
+        boolean uniform = true;
+        for (float boost : boosts) {
+            sum += boost;
+            uniform &= boost == AbstractQueryBuilder.DEFAULT_BOOST;
+        }
+
+        if (uniform || sum <= 0) {
+            return null;
+        }
+
+        float[] weights = new float[boosts.size()];
+        for (int i = 0; i < weights.length; i++) {
+            weights[i] = boosts.get(i) / sum;
+        }
+        return weights;
     }
 
     private List<Query> buildCrossFieldQuery(Map<String, Float> fieldNames, Object value, String minimumShouldMatch, float tieBreaker) {
