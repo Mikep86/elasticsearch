@@ -60,8 +60,28 @@ public class MultiMatchQueryParser extends MatchQueryParser {
 
     public Query parse(MultiMatchQueryBuilder.Type type, Map<String, Float> fieldNames, Object value, String minimumShouldMatch)
         throws IOException {
+        return parse(type, fieldNames, value, minimumShouldMatch, Map.of());
+    }
+
+    /**
+     * Parses the query, additionally fusing already-built clauses when {@code type} is [bayesian].
+     *
+     * @param additionalClauses queries mapped to their field boost, used as extra fusion clauses. Each must score in (0, 1), as
+     *                          {@link LogOddsFusionQuery} requires. Only valid for the [bayesian] type.
+     */
+    public Query parse(
+        MultiMatchQueryBuilder.Type type,
+        Map<String, Float> fieldNames,
+        Object value,
+        String minimumShouldMatch,
+        Map<Query, Float> additionalClauses
+    ) throws IOException {
+        if (additionalClauses.isEmpty() == false && type != MultiMatchQueryBuilder.Type.BAYESIAN) {
+            throw new IllegalArgumentException("additional clauses are only supported by the [bayesian] type, got [" + type + "]");
+        }
+
         boolean hasMappedField = fieldNames.keySet().stream().anyMatch(k -> context.getFieldType(k) != null);
-        if (hasMappedField == false) {
+        if (hasMappedField == false && additionalClauses.isEmpty()) {
             // all query fields are unmapped
             Query query = Queries.newUnmappedFieldsQuery(fieldNames.keySet());
             query.visit(queryVisitor);
@@ -69,7 +89,7 @@ public class MultiMatchQueryParser extends MatchQueryParser {
         }
 
         if (type == MultiMatchQueryBuilder.Type.BAYESIAN) {
-            return buildBayesianQuery(fieldNames, value, minimumShouldMatch);
+            return buildBayesianQuery(fieldNames, value, minimumShouldMatch, additionalClauses);
         }
 
         final float tieBreaker = groupTieBreaker == null ? type.tieBreaker() : groupTieBreaker;
@@ -121,7 +141,12 @@ public class MultiMatchQueryParser extends MatchQueryParser {
         return queries;
     }
 
-    private Query buildBayesianQuery(Map<String, Float> fieldNames, Object value, String minimumShouldMatch) throws IOException {
+    private Query buildBayesianQuery(
+        Map<String, Float> fieldNames,
+        Object value,
+        String minimumShouldMatch,
+        Map<Query, Float> additionalClauses
+    ) throws IOException {
         final BayesianBM25ShardParameters shardParameters = context.getBayesianBM25Parameters();
         final List<Query> clauses = new ArrayList<>();
         final List<Float> boosts = new ArrayList<>();
@@ -150,6 +175,11 @@ public class MultiMatchQueryParser extends MatchQueryParser {
             }
 
             clauses.add(new BayesianScoreQuery(query, parameters.alpha(), parameters.beta(), parameters.baseRate()));
+            boosts.add(entry.getValue() == null ? AbstractQueryBuilder.DEFAULT_BOOST : entry.getValue());
+        }
+
+        for (Map.Entry<Query, Float> entry : additionalClauses.entrySet()) {
+            clauses.add(entry.getKey());
             boosts.add(entry.getValue() == null ? AbstractQueryBuilder.DEFAULT_BOOST : entry.getValue());
         }
 

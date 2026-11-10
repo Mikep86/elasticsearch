@@ -7,25 +7,35 @@
 
 package org.elasticsearch.xpack.inference.queries;
 
+import org.apache.lucene.search.Query;
 import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.support.PlainActionFuture;
 import org.elasticsearch.common.io.stream.StreamInput;
+import org.elasticsearch.common.io.stream.StreamOutput;
+import org.elasticsearch.core.Nullable;
 import org.elasticsearch.index.query.BoolQueryBuilder;
 import org.elasticsearch.index.query.DisMaxQueryBuilder;
 import org.elasticsearch.index.query.MultiMatchQueryBuilder;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.QueryRewriteContext;
+import org.elasticsearch.index.query.SearchExecutionContext;
 import org.elasticsearch.inference.InferenceResults;
 import org.elasticsearch.inference.InferenceStringGroup;
+import org.elasticsearch.inference.TaskType;
+import org.elasticsearch.search.internal.MaxClauseCountQueryVisitor;
+import org.elasticsearch.xpack.core.ml.inference.results.TextExpansionResults;
+import org.elasticsearch.xpack.inference.mapper.SemanticFieldMapper;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 /**
  * Intercepts {@code multi_match} queries so that {@code semantic_text} fields are queried with a {@link SemanticQueryBuilder}.
- * Only the {@code best_fields} and {@code most_fields} types can be combined with semantic queries.
+ * Only the {@code best_fields}, {@code most_fields} and {@code bayesian} types can be combined with semantic queries.
  */
 public class InterceptedInferenceMultiMatchQueryBuilder extends InterceptedInferenceQueryBuilder<MultiMatchQueryBuilder> {
     public static final String NAME = "intercepted_inference_multi_match";
@@ -34,8 +44,16 @@ public class InterceptedInferenceMultiMatchQueryBuilder extends InterceptedInfer
     // branch, and both changes ship together.
     private static final TransportVersion MULTI_MATCH_QUERY_INTERCEPTION = TransportVersion.fromName("multi_match_bayesian_type");
 
+    /**
+     * The semantic clauses of a [bayesian] query by field, which are fused with the lexical fields in {@link #doToQuery}. Only set while
+     * rewriting on a data node, so it is never serialized.
+     */
+    @Nullable
+    private final Map<String, QueryBuilder> semanticQueries;
+
     public InterceptedInferenceMultiMatchQueryBuilder(MultiMatchQueryBuilder originalQuery) {
         super(originalQuery);
+        this.semanticQueries = null;
     }
 
     public InterceptedInferenceMultiMatchQueryBuilder(
@@ -43,10 +61,12 @@ public class InterceptedInferenceMultiMatchQueryBuilder extends InterceptedInfer
         Map<FullyQualifiedInferenceId, InferenceResults> inferenceResultsMap
     ) {
         super(originalQuery, inferenceResultsMap);
+        this.semanticQueries = null;
     }
 
     public InterceptedInferenceMultiMatchQueryBuilder(StreamInput in) throws IOException {
         super(in);
+        this.semanticQueries = null;
     }
 
     private InterceptedInferenceMultiMatchQueryBuilder(
@@ -56,6 +76,15 @@ public class InterceptedInferenceMultiMatchQueryBuilder extends InterceptedInfer
         boolean interceptedCcsRequest
     ) {
         super(other, inferenceResultsMap, inferenceInfoFuture, interceptedCcsRequest);
+        this.semanticQueries = null;
+    }
+
+    private InterceptedInferenceMultiMatchQueryBuilder(
+        InterceptedInferenceMultiMatchQueryBuilder other,
+        Map<String, QueryBuilder> semanticQueries
+    ) {
+        super(other, other.inferenceResultsMap, other.inferenceInfoFuture, other.interceptedCcsRequest);
+        this.semanticQueries = semanticQueries;
     }
 
     @Override
@@ -81,6 +110,10 @@ public class InterceptedInferenceMultiMatchQueryBuilder extends InterceptedInfer
     protected void postInferenceCoordinatorNodeValidate(InferenceQueryUtils.InferenceInfo inferenceInfo) {
         if (inferenceInfo.inferenceFieldCount() > 0) {
             validateTypeSupportsInferenceFields();
+            if (originalQuery.type() == MultiMatchQueryBuilder.Type.BAYESIAN
+                && inferenceInfo.inferenceResultsMap().values().stream().anyMatch(TextExpansionResults.class::isInstance)) {
+                throw unsupportedSparseException();
+            }
         }
     }
 
@@ -105,6 +138,12 @@ public class InterceptedInferenceMultiMatchQueryBuilder extends InterceptedInfer
         // Data node safety net: a wildcard can resolve to inference fields only in some indices
         validateTypeSupportsInferenceFields();
 
+        if (originalQuery.type() == MultiMatchQueryBuilder.Type.BAYESIAN) {
+            validateNoSparseFields(inferenceFields.keySet(), indexMetadataContext);
+            // The semantic clauses are fused with the lexical fields in doToQuery, once doRewriteIntercepted has rewritten them
+            return this;
+        }
+
         List<QueryBuilder> clauses = new ArrayList<>();
         String queryText = originalQuery.value().toString();
         for (Map.Entry<String, Float> entry : inferenceFields.entrySet()) {
@@ -121,6 +160,66 @@ public class InterceptedInferenceMultiMatchQueryBuilder extends InterceptedInfer
             rewritten = combine(clauses);
         }
         return rewritten.boost(originalQuery.boost()).queryName(originalQuery.queryName());
+    }
+
+    @Override
+    protected QueryBuilder doRewriteIntercepted(QueryRewriteContext queryRewriteContext) throws IOException {
+        if (originalQuery.type() != MultiMatchQueryBuilder.Type.BAYESIAN || queryRewriteContext.convertToSearchExecutionContext() == null) {
+            return this;
+        }
+
+        // Rewrite the semantic clauses down to nested kNN queries, one rewrite round per call, until they stop changing
+        String queryText = originalQuery.value().toString();
+        Map<String, QueryBuilder> rewrittenQueries = new LinkedHashMap<>();
+        boolean changed = semanticQueries == null;
+        for (String field : getQueryFields(queryRewriteContext).inferenceFields().keySet()) {
+            QueryBuilder clause = semanticQueries == null
+                ? new SemanticQueryBuilder(field, queryText, null, inferenceResultsMap)
+                : semanticQueries.get(field);
+            QueryBuilder rewrittenClause = clause.rewrite(queryRewriteContext);
+            changed |= rewrittenClause != clause;
+            rewrittenQueries.put(field, rewrittenClause);
+        }
+        if (changed == false) {
+            return this;
+        }
+        return new InterceptedInferenceMultiMatchQueryBuilder(this, rewrittenQueries).boost(originalQuery.boost())
+            .queryName(originalQuery.queryName());
+    }
+
+    @Override
+    public Query doToQuery(SearchExecutionContext context, MaxClauseCountQueryVisitor queryVisitor) throws IOException {
+        if (semanticQueries == null) {
+            // TODO: Should semanticQueries ever be null here?
+            return super.doToQuery(context, queryVisitor);
+        }
+
+        Map<String, Float> inferenceFields = getQueryFields(context).inferenceFields();
+        Map<Query, Float> semanticClauses = new LinkedHashMap<>();
+        for (Map.Entry<String, QueryBuilder> entry : semanticQueries.entrySet()) {
+            semanticClauses.put(entry.getValue().toQuery(context, queryVisitor), inferenceFields.get(entry.getKey()));
+        }
+        return originalQuery.toBayesianQuery(context, queryVisitor, semanticQueries.keySet(), semanticClauses);
+    }
+
+    @Override
+    protected void doWriteTo(StreamOutput out) throws IOException {
+        if (semanticQueries != null) {
+            throw new IllegalStateException("semanticQueries should never be serialized");
+        }
+
+        super.doWriteTo(out);
+    }
+
+    @Override
+    protected boolean doEquals(InterceptedInferenceQueryBuilder<MultiMatchQueryBuilder> other) {
+        return super.doEquals(other)
+            && Objects.equals(semanticQueries, ((InterceptedInferenceMultiMatchQueryBuilder) other).semanticQueries);
+    }
+
+    @Override
+    protected int doHashCode() {
+        return Objects.hash(super.doHashCode(), semanticQueries);
     }
 
     @Override
@@ -155,7 +254,8 @@ public class InterceptedInferenceMultiMatchQueryBuilder extends InterceptedInfer
                 clauses.forEach(bool::should);
                 yield bool;
             }
-            case CROSS_FIELDS, PHRASE, PHRASE_PREFIX, BOOL_PREFIX, BAYESIAN -> throw unsupportedTypeException();
+            case CROSS_FIELDS, PHRASE, PHRASE_PREFIX, BOOL_PREFIX -> throw unsupportedTypeException();
+            case BAYESIAN -> throw new IllegalStateException("[bayesian] queries are fused in doToQuery");
         };
     }
 
@@ -164,11 +264,30 @@ public class InterceptedInferenceMultiMatchQueryBuilder extends InterceptedInfer
      */
     private void validateTypeSupportsInferenceFields() {
         switch (originalQuery.type()) {
-            case BEST_FIELDS, MOST_FIELDS -> {
+            case BEST_FIELDS, MOST_FIELDS, BAYESIAN -> {
             }
-            // TODO: BAYESIAN could fuse semantic scores by log-odds once vector scores can be calibrated
-            case CROSS_FIELDS, PHRASE, PHRASE_PREFIX, BOOL_PREFIX, BAYESIAN -> throw unsupportedTypeException();
+            case CROSS_FIELDS, PHRASE, PHRASE_PREFIX, BOOL_PREFIX -> throw unsupportedTypeException();
         }
+    }
+
+    /**
+     * Throws if any of the fields is backed by a sparse embedding endpoint: sparse scores are unbounded, but log-odds fusion needs
+     * probabilities, and there is no calibration for them yet.
+     */
+    private static void validateNoSparseFields(Iterable<String> inferenceFields, QueryRewriteContext indexMetadataContext) {
+        for (String field : inferenceFields) {
+            if (indexMetadataContext.getFieldType(field) instanceof SemanticFieldMapper.SemanticFieldType semanticFieldType
+                && semanticFieldType.getModelSettings() != null
+                && semanticFieldType.getModelSettings().taskType() == TaskType.SPARSE_EMBEDDING) {
+                throw unsupportedSparseException();
+            }
+        }
+    }
+
+    private static IllegalArgumentException unsupportedSparseException() {
+        return new IllegalArgumentException(
+            "[" + MultiMatchQueryBuilder.NAME + "] query type [bayesian] does not support sparse embedding semantic_text fields"
+        );
     }
 
     private IllegalArgumentException unsupportedTypeException() {
@@ -177,7 +296,7 @@ public class InterceptedInferenceMultiMatchQueryBuilder extends InterceptedInfer
                 + MultiMatchQueryBuilder.NAME
                 + "] query type ["
                 + originalQuery.type().parseField().getPreferredName()
-                + "] is not supported when querying semantic_text fields. Supported types: [best_fields, most_fields]"
+                + "] is not supported when querying semantic_text fields. Supported types: [best_fields, most_fields, bayesian]"
         );
     }
 

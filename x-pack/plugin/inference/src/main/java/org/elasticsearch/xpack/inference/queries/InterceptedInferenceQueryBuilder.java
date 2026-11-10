@@ -236,6 +236,23 @@ public abstract class InterceptedInferenceQueryBuilder<T extends AbstractQueryBu
         return this;
     }
 
+    /**
+     * Hook for rewrite logic that runs when the index-specific rewrite has nothing left to change, i.e. where the rewrite would otherwise
+     * return {@code this}. Implementations can use it to rewrite state they hold, and must return {@code this} once nothing changes so
+     * that the rewrite loop terminates.
+     */
+    protected QueryBuilder doRewriteIntercepted(QueryRewriteContext queryRewriteContext) throws IOException {
+        return this;
+    }
+
+    /**
+     * The queried fields of one index, split by whether they are inference fields.
+     *
+     * @param inferenceFields The concrete inference fields and their boosts
+     * @param nonInferenceFields The remaining fields and field patterns and their boosts
+     */
+    protected record QueryFields(Map<String, Float> inferenceFields, Map<String, Float> nonInferenceFields) {}
+
     @Override
     protected void doWriteTo(StreamOutput out) throws IOException {
         out.writeNamedWriteable(originalQuery);
@@ -273,7 +290,7 @@ public abstract class InterceptedInferenceQueryBuilder<T extends AbstractQueryBu
     }
 
     @Override
-    public Query doToQuery(SearchExecutionContext context, MaxClauseCountQueryVisitor queryVisitor) {
+    public Query doToQuery(SearchExecutionContext context, MaxClauseCountQueryVisitor queryVisitor) throws IOException {
         throw new UnsupportedOperationException("Query should be rewritten to a different type");
     }
 
@@ -309,10 +326,20 @@ public abstract class InterceptedInferenceQueryBuilder<T extends AbstractQueryBu
             return doRewriteGetInferenceResults(queryRewriteContext);
         }
 
-        return this;
+        return doRewriteIntercepted(queryRewriteContext);
     }
 
-    private QueryBuilder doRewriteBuildQuery(QueryRewriteContext indexMetadataContext) {
+    private QueryBuilder doRewriteBuildQuery(QueryRewriteContext indexMetadataContext) throws IOException {
+        QueryFields fields = getQueryFields(indexMetadataContext);
+        QueryBuilder rewritten = queryFields(fields.inferenceFields(), fields.nonInferenceFields(), indexMetadataContext);
+        return rewritten == this ? doRewriteIntercepted(indexMetadataContext) : rewritten;
+    }
+
+    /**
+     * Splits the fields queried in an index into inference and non-inference fields, applying the default fields and wildcard
+     * resolution configured by {@link #useDefaultFields()} and {@link #resolveWildcards()}.
+     */
+    protected final QueryFields getQueryFields(QueryRewriteContext indexMetadataContext) {
         Map<String, Float> queryFields = getFields();
         if (useDefaultFields() && queryFields.isEmpty()) {
             queryFields = getDefaultFields(indexMetadataContext.getIndexSettings().getSettings());
@@ -322,7 +349,7 @@ public abstract class InterceptedInferenceQueryBuilder<T extends AbstractQueryBu
         Map<String, Float> nonInferenceFieldsToQuery = new HashMap<>(queryFields);
         nonInferenceFieldsToQuery.keySet().removeAll(inferenceFieldsToQuery.keySet());
 
-        return queryFields(inferenceFieldsToQuery, nonInferenceFieldsToQuery, indexMetadataContext);
+        return new QueryFields(inferenceFieldsToQuery, nonInferenceFieldsToQuery);
     }
 
     private QueryBuilder doRewriteGetInferenceResults(QueryRewriteContext queryRewriteContext) throws IOException {

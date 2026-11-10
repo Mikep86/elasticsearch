@@ -38,6 +38,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 import java.util.TreeMap;
 
 /**
@@ -744,6 +745,30 @@ public final class MultiMatchQueryBuilder extends AbstractQueryBuilder<MultiMatc
 
     @Override
     protected Query doToQuery(SearchExecutionContext context, MaxClauseCountQueryVisitor queryVisitor) throws IOException {
+        MultiMatchQueryParser multiMatchQuery = newParser(context, queryVisitor);
+        return multiMatchQuery.parse(type, resolveFields(context, multiMatchQuery), value, minimumShouldMatch);
+    }
+
+    /**
+     * Builds the [bayesian] query, fusing {@code additionalClauses} with the lexical clauses of this query's fields.
+     *
+     * @param excludedFields fields to leave out of the lexical clauses because {@code additionalClauses} already covers them
+     * @param additionalClauses already-built queries mapped to their field boost; each must score in (0, 1)
+     */
+    public Query toBayesianQuery(
+        SearchExecutionContext context,
+        MaxClauseCountQueryVisitor queryVisitor,
+        Set<String> excludedFields,
+        Map<Query, Float> additionalClauses
+    ) throws IOException {
+        assert type == Type.BAYESIAN : "expected type [bayesian] but was [" + type + "]";
+        MultiMatchQueryParser multiMatchQuery = newParser(context, queryVisitor);
+        Map<String, Float> fields = new HashMap<>(resolveFields(context, multiMatchQuery));
+        fields.keySet().removeAll(excludedFields);
+        return multiMatchQuery.parse(type, fields, value, minimumShouldMatch, additionalClauses);
+    }
+
+    private MultiMatchQueryParser newParser(SearchExecutionContext context, MaxClauseCountQueryVisitor queryVisitor) {
         MultiMatchQueryParser multiMatchQuery = new MultiMatchQueryParser(context, queryVisitor);
         if (analyzer != null) {
             if (context.getIndexAnalyzers().get(analyzer) == null) {
@@ -770,7 +795,14 @@ public final class MultiMatchQueryBuilder extends AbstractQueryBuilder<MultiMatc
         multiMatchQuery.setZeroTermsQuery(zeroTermsQuery);
         multiMatchQuery.setAutoGenerateSynonymsPhraseQuery(autoGenerateSynonymsPhraseQuery);
         multiMatchQuery.setTranspositions(fuzzyTranspositions);
+        return multiMatchQuery;
+    }
 
+    /**
+     * Resolves the queried fields, including wildcards and the default fields. Enables leniency on {@code multiMatchQuery} when the
+     * resolution matched all fields and leniency wasn't set explicitly.
+     */
+    private Map<String, Float> resolveFields(SearchExecutionContext context, MultiMatchQueryParser multiMatchQuery) {
         Map<String, Float> newFieldsBoosts;
         boolean isAllField;
         if (fieldsBoosts.isEmpty()) {
@@ -787,7 +819,7 @@ public final class MultiMatchQueryBuilder extends AbstractQueryBuilder<MultiMatc
             // set in the request
             multiMatchQuery.setLenient(true);
         }
-        return multiMatchQuery.parse(type, newFieldsBoosts, value, minimumShouldMatch);
+        return newFieldsBoosts;
     }
 
     @Override
