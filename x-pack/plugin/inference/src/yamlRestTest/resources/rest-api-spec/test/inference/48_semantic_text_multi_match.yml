@@ -209,13 +209,16 @@ setup:
       features: [ "headers" ]
 
   # Only the semantic field is queried: fusing it with text fields needs Bayesian BM25 parameters, which are estimated after a merge
+  # The semantic field's vector scores are calibrated per shard from its own vectors, which needs at least two docs because each sampled
+  # doc's own match is excluded. Both docs are indexed in one refresh so that a single estimate sees them both.
   - do:
-      index:
-        index: test-dense-index
-        id: doc_1
-        body:
-          inference_field: "It was a beautiful game"
+      bulk:
         refresh: true
+        body:
+          - '{"index": {"_index": "test-dense-index", "_id": "doc_1"}}'
+          - '{"inference_field": "It was a beautiful game"}'
+          - '{"index": {"_index": "test-dense-index", "_id": "doc_2"}}'
+          - '{"inference_field": "The match ended in a draw"}'
 
   - do:
       headers:
@@ -230,7 +233,8 @@ setup:
               type: bayesian
               fields: [ "inference_field" ]
 
-  - match: { hits.total.value: 1 }
-  - match: { hits.hits.0._id: "doc_1" }
+  - match: { hits.total.value: 2 }
   - gt: { hits.hits.0._score: 0.0 }
   - lte: { hits.hits.0._score: 1.0 }
+  - gt: { hits.hits.1._score: 0.0 }
+  - lte: { hits.hits.1._score: 1.0 }
