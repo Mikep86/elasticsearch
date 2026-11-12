@@ -109,3 +109,6 @@ flakiness-outcomes.json
 flakiness-project-targets.tgz
 flakiness-status/
 flakiness-iters/
+
+# Bayesian BM25 evaluation
+bayesian_bm25_eval/
