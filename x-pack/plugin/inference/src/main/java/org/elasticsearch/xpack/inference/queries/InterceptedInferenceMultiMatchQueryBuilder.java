@@ -7,6 +7,8 @@
 
 package org.elasticsearch.xpack.inference.queries;
 
+import org.apache.lucene.search.BayesianScoreEstimator;
+import org.apache.lucene.search.BayesianScoreQuery;
 import org.apache.lucene.search.Query;
 import org.elasticsearch.TransportVersion;
 import org.elasticsearch.action.support.PlainActionFuture;
@@ -18,13 +20,16 @@ import org.elasticsearch.index.query.DisMaxQueryBuilder;
 import org.elasticsearch.index.query.MultiMatchQueryBuilder;
 import org.elasticsearch.index.query.QueryBuilder;
 import org.elasticsearch.index.query.QueryRewriteContext;
+import org.elasticsearch.index.query.QueryShardException;
 import org.elasticsearch.index.query.SearchExecutionContext;
+import org.elasticsearch.index.shard.BayesianBM25ShardParameters;
 import org.elasticsearch.inference.InferenceResults;
 import org.elasticsearch.inference.InferenceStringGroup;
 import org.elasticsearch.inference.TaskType;
 import org.elasticsearch.search.internal.MaxClauseCountQueryVisitor;
 import org.elasticsearch.xpack.core.ml.inference.results.TextExpansionResults;
 import org.elasticsearch.xpack.inference.mapper.SemanticFieldMapper;
+import org.elasticsearch.xpack.inference.mapper.SemanticTextField;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -195,9 +200,25 @@ public class InterceptedInferenceMultiMatchQueryBuilder extends InterceptedInfer
         }
 
         Map<String, Float> inferenceFields = getQueryFields(context).inferenceFields();
+        BayesianBM25ShardParameters shardParameters = context.getBayesianBM25Parameters();
         Map<Query, Float> semanticClauses = new LinkedHashMap<>();
         for (Map.Entry<String, QueryBuilder> entry : semanticQueries.entrySet()) {
-            semanticClauses.put(entry.getValue().toQuery(context, queryVisitor), inferenceFields.get(entry.getKey()));
+            String field = entry.getKey();
+            BayesianScoreEstimator.Parameters parameters = shardParameters == null
+                ? null
+                : shardParameters.get(SemanticTextField.getEmbeddingsFieldName(field));
+
+            if (parameters == null) {
+                throw new QueryShardException(
+                    context,
+                    "[multi_match] type [bayesian] has no vector calibration parameters for field ["
+                        + field
+                        + "] on this shard; they are estimated for float dense embeddings, after the first merge"
+                );
+            }
+
+            Query query = entry.getValue().toQuery(context, queryVisitor);
+            semanticClauses.put(new BayesianScoreQuery(query, parameters.alpha(), parameters.beta()), inferenceFields.get(field));
         }
         return originalQuery.toBayesianQuery(context, queryVisitor, semanticQueries.keySet(), semanticClauses);
     }

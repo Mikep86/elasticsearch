@@ -16,7 +16,8 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Bayesian BM25 parameters estimated for the full-text fields of a shard, and the merged segments they were computed from.
+ * Bayesian BM25 parameters estimated for the full-text fields of a shard, and the merged segments they were computed from. Also holds
+ * the sigmoid calibration of semantic fields' vector scores, keyed by the name of the dense vector field that holds their embeddings.
  */
 public record BayesianBM25ShardParameters(Set<String> segmentNames, Map<String, BayesianScoreEstimator.Parameters> byField) {
 
