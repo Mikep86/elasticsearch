@@ -9,6 +9,7 @@
 
 package org.elasticsearch.index.shard;
 
+import org.apache.lucene.document.FeatureField;
 import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.FieldInfos;
 import org.apache.lucene.index.FloatVectorValues;
@@ -16,7 +17,6 @@ import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.LeafReaderContext;
-import org.apache.lucene.index.NumericDocValues;
 import org.apache.lucene.index.PostingsEnum;
 import org.apache.lucene.index.ReaderUtil;
 import org.apache.lucene.index.SegmentReader;
@@ -26,7 +26,9 @@ import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.search.BayesianScoreEstimator;
 import org.apache.lucene.search.BooleanClause;
 import org.apache.lucene.search.BooleanQuery;
+import org.apache.lucene.search.BoostQuery;
 import org.apache.lucene.search.DocIdSetIterator;
+import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ReferenceManager;
 import org.apache.lucene.search.ScoreDoc;
@@ -47,8 +49,12 @@ import org.elasticsearch.index.engine.Engine;
 import org.elasticsearch.index.mapper.MappedFieldType;
 import org.elasticsearch.index.mapper.MapperService;
 import org.elasticsearch.index.mapper.MappingLookup;
+import org.elasticsearch.index.mapper.NestedObjectMapper;
 import org.elasticsearch.index.mapper.TextFieldMapper;
 import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.DenseVectorFieldType;
+import org.elasticsearch.index.mapper.vectors.SparseVectorFieldMapper.SparseVectorFieldType;
+import org.elasticsearch.index.mapper.vectors.XFeatureField;
+import org.elasticsearch.index.search.ESToParentBlockJoinQuery;
 import org.elasticsearch.logging.LogManager;
 import org.elasticsearch.logging.Logger;
 import org.elasticsearch.search.vectors.VectorData;
@@ -72,9 +78,10 @@ import java.util.function.Supplier;
  * Estimates Bayesian BM25 parameters for the full-text fields of a shard whenever a refresh makes a newly merged segment visible.
  * Text fields are calibrated with document-derived pseudo-queries: each sampled document is scored against its own top terms, which
  * gives a realistic strong-match score that anchors the sigmoid. No base rate is estimated.
- * It also estimates sigmoid calibration parameters for the dense vector fields of semantic fields, so that their scores can be fused
- * with the calibrated BM25 scores. The estimate runs asynchronously, at most one at a time, against the shard-wide searcher so that it
- * sees the same term statistics as queries do.
+ * It also estimates sigmoid calibration parameters for the dense and sparse vector fields of semantic fields, so that their scores can be
+ * fused with the calibrated BM25 scores; sparse fields are calibrated like dense ones, with sampled chunks' token vectors as pseudo-queries.
+ * The estimate runs asynchronously, at most one at a time, against the shard-wide searcher so that it sees the same term statistics as
+ * queries do.
  */
 class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
 
@@ -87,6 +94,10 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
     /** Candidates per pseudo-query, following the kNN query default of 1.5 * k. */
     private static final int VECTOR_NUM_CANDIDATES = Math.round(1.5f * (VECTOR_NEIGHBORS + 1));
     private static final long VECTOR_SAMPLE_SEED = 42;
+
+    /** Number of chunks whose token vectors are sampled as pseudo-queries when calibrating a sparse vector field. */
+    private static final int SPARSE_SAMPLES = 200;
+    private static final long SPARSE_SAMPLE_SEED = 42;
 
     /** Number of documents sampled as pseudo-query sources when calibrating a text field. */
     private static final int TEXT_DOC_SAMPLES = 200;
@@ -188,9 +199,13 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
                     logger.warn("[{}] failed to estimate Bayesian BM25 parameters for field [{}]", shardId, field, e);
                 }
             }
-            for (DenseVectorFieldType fieldType : semanticVectorFields()) {
+            for (MappedFieldType fieldType : semanticEmbeddingFields()) {
                 try {
-                    BayesianScoreEstimator.Parameters vectorParameters = estimateVector(searcher, fieldType);
+                    BayesianScoreEstimator.Parameters vectorParameters = switch (fieldType) {
+                        case DenseVectorFieldType dense -> estimateVector(searcher, dense);
+                        case SparseVectorFieldType sparse -> estimateSparse(searcher, sparse);
+                        default -> throw new AssertionError("unexpected embedding field type [" + fieldType.typeName() + "]");
+                    };
                     if (vectorParameters != null) {
                         byField.put(fieldType.name(), vectorParameters);
                     }
@@ -213,33 +228,21 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
         final IndexReader reader = searcher.getIndexReader();
         final List<LeafReaderContext> leaves = reader.leaves();
 
-        final long[] leafStarts = new long[leaves.size() + 1];
-        for (int i = 0; i < leaves.size(); i++) {
-            leafStarts[i + 1] = leafStarts[i] + countLiveDocsWithField(leaves.get(i), field);
-        }
-        final long total = leafStarts[leaves.size()];
-        if (total == 0) {
+        // Sample live documents that have the field, i.e. have norms, then score each one against its own top terms
+        final int[][] sampled = sampleDocs(leaves, leaf -> leaf.reader().getNormValues(field), TEXT_DOC_SAMPLES, TEXT_SAMPLE_SEED);
+        if (sampled == null) {
             return null;
         }
-
-        // Sample distinct positions among the live documents that have the field, then score each sampled document
-        final int sampleCount = (int) Math.min(TEXT_DOC_SAMPLES, total);
-        final long[] sampled = new Random(TEXT_SAMPLE_SEED).longs(0, total).distinct().limit(sampleCount).sorted().toArray();
-        final float[] scores = new float[sampleCount];
+        final TermWeigher weigher = new IdfWeigher(reader, field);
+        final float[] scores = new float[TEXT_DOC_SAMPLES];
         int scoreCount = 0;
-        int next = 0;
-        for (int i = 0; i < leaves.size() && next < sampleCount; i++) {
-            int end = next;
-            while (end < sampleCount && sampled[end] < leafStarts[i + 1]) {
-                end++;
-            }
-            if (end == next) {
+        for (int i = 0; i < leaves.size(); i++) {
+            final int[] docs = sampled[i];
+            if (docs.length == 0) {
                 continue;
             }
             final LeafReaderContext leaf = leaves.get(i);
-            final int[] docs = sampledDocs(leaf, field, Arrays.copyOfRange(sampled, next, end), leafStarts[i]);
-            next = end;
-            final List<PriorityQueue<WeightedTerm>> topTerms = topTerms(reader, leaf, field, docs);
+            final List<PriorityQueue<WeightedTerm>> topTerms = collectTerms(leaf, field, docs, pseudoQueryTerms, weigher);
             for (int d = 0; d < docs.length; d++) {
                 final float score = scoreOwnTerms(searcher, leaf, field, docs[d], topTerms.get(d));
                 if (score > 0) {
@@ -263,15 +266,54 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
         return Math.log(p / (1 - p));
     }
 
-    /** Counts the live documents of the leaf that have norms, i.e. a value, for the field. */
-    private static long countLiveDocsWithField(LeafReaderContext leaf, String field) throws IOException {
-        final NumericDocValues norms = leaf.reader().getNormValues(field);
-        if (norms == null) {
+    /** Returns, for one leaf, an iterator over the documents that have a value for a field, or {@code null} if none do. */
+    @FunctionalInterface
+    private interface DocsWithValue {
+        DocIdSetIterator iterator(LeafReaderContext leaf) throws IOException;
+    }
+
+    /**
+     * Samples up to {@code maxSamples} distinct live documents across the shard among those {@code docsWithValue} returns.
+     *
+     * @return the sorted, leaf-level doc ids sampled in each leaf, or {@code null} if no live document has a value
+     */
+    private static int[][] sampleDocs(List<LeafReaderContext> leaves, DocsWithValue docsWithValue, int maxSamples, long seed)
+        throws IOException {
+        final long[] leafStarts = new long[leaves.size() + 1];
+        for (int i = 0; i < leaves.size(); i++) {
+            leafStarts[i + 1] = leafStarts[i] + countLiveDocs(leaves.get(i), docsWithValue);
+        }
+        final long total = leafStarts[leaves.size()];
+        if (total == 0) {
+            return null;
+        }
+
+        final int sampleCount = (int) Math.min(maxSamples, total);
+        final long[] sampled = new Random(seed).longs(0, total).distinct().limit(sampleCount).sorted().toArray();
+        final int[][] perLeaf = new int[leaves.size()][];
+        int next = 0;
+        for (int i = 0; i < leaves.size(); i++) {
+            int end = next;
+            while (end < sampleCount && sampled[end] < leafStarts[i + 1]) {
+                end++;
+            }
+            perLeaf[i] = end == next
+                ? new int[0]
+                : sampledDocs(leaves.get(i), docsWithValue, Arrays.copyOfRange(sampled, next, end), leafStarts[i]);
+            next = end;
+        }
+        return perLeaf;
+    }
+
+    /** Counts the live documents of the leaf that {@code docsWithValue} returns. */
+    private static long countLiveDocs(LeafReaderContext leaf, DocsWithValue docsWithValue) throws IOException {
+        final DocIdSetIterator docs = docsWithValue.iterator(leaf);
+        if (docs == null) {
             return 0;
         }
         final Bits liveDocs = leaf.reader().getLiveDocs();
         long count = 0;
-        for (int doc = norms.nextDoc(); doc != DocIdSetIterator.NO_MORE_DOCS; doc = norms.nextDoc()) {
+        for (int doc = docs.nextDoc(); doc != DocIdSetIterator.NO_MORE_DOCS; doc = docs.nextDoc()) {
             if (liveDocs == null || liveDocs.get(doc)) {
                 count++;
             }
@@ -280,16 +322,17 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
     }
 
     /**
-     * Resolves sorted shard-wide sample positions to the leaf's doc ids, counting only live documents that have the field, in the
-     * same order as {@link #countLiveDocsWithField}.
+     * Resolves sorted shard-wide sample positions to the leaf's doc ids, counting only the live documents {@code docsWithValue}
+     * returns, in the same order as {@link #countLiveDocs}.
      */
-    private static int[] sampledDocs(LeafReaderContext leaf, String field, long[] positions, long leafStart) throws IOException {
-        final NumericDocValues norms = leaf.reader().getNormValues(field);
+    private static int[] sampledDocs(LeafReaderContext leaf, DocsWithValue docsWithValue, long[] positions, long leafStart)
+        throws IOException {
+        final DocIdSetIterator iterator = docsWithValue.iterator(leaf);
         final Bits liveDocs = leaf.reader().getLiveDocs();
         final int[] docs = new int[positions.length];
         int next = 0;
         long position = leafStart;
-        for (int doc = norms.nextDoc(); doc != DocIdSetIterator.NO_MORE_DOCS && next < positions.length; doc = norms.nextDoc()) {
+        for (int doc = iterator.nextDoc(); doc != DocIdSetIterator.NO_MORE_DOCS && next < positions.length; doc = iterator.nextDoc()) {
             if (liveDocs != null && liveDocs.get(doc) == false) {
                 continue;
             }
@@ -304,26 +347,63 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
 
     private record WeightedTerm(BytesRef term, float weight) {}
 
+    /** Weighs a term of a document from its term frequency, to rank the document's terms. */
+    @FunctionalInterface
+    private interface TermWeigher {
+        float weight(BytesRef term, int freq) throws IOException;
+    }
+
     /**
-     * Finds the top {@link #pseudoQueryTerms} terms of each of the leaf's sorted documents in one pass over the field's terms,
-     * ranked by {@code idf * tf / (tf + k1)}. Each queue is a min-heap on the weight.
+     * Weighs text terms by {@code idf * tf / (tf + k1)}. The shard-wide idf is computed once per term: terms arrive in order, each one
+     * for every sampled document that contains it.
      */
-    private List<PriorityQueue<WeightedTerm>> topTerms(IndexReader reader, LeafReaderContext leaf, String field, int[] docs)
-        throws IOException {
+    private static final class IdfWeigher implements TermWeigher {
+        private final IndexReader reader;
+        private final String field;
+        private final long docCount;
+        private BytesRef lastTerm;
+        private float lastIdf;
+
+        IdfWeigher(IndexReader reader, String field) throws IOException {
+            this.reader = reader;
+            this.field = field;
+            this.docCount = Math.max(reader.getDocCount(field), 1);
+        }
+
+        @Override
+        public float weight(BytesRef term, int freq) throws IOException {
+            if (lastTerm == null || term.bytesEquals(lastTerm) == false) {
+                final long docFreq = reader.docFreq(new Term(field, term));
+                lastIdf = (float) Math.log(1 + (docCount - docFreq + 0.5) / (docFreq + 0.5));
+                lastTerm = BytesRef.deepCopyOf(term);
+            }
+            return lastIdf * freq / (freq + TERM_RANK_K1);
+        }
+    }
+
+    /**
+     * Finds the top {@code limit} terms of each of the leaf's sorted documents in one pass over the field's terms, ranked by
+     * {@code weigher}. Each queue is a min-heap on the weight.
+     */
+    private static List<PriorityQueue<WeightedTerm>> collectTerms(
+        LeafReaderContext leaf,
+        String field,
+        int[] docs,
+        int limit,
+        TermWeigher weigher
+    ) throws IOException {
         final List<PriorityQueue<WeightedTerm>> topTerms = new ArrayList<>(docs.length);
         for (int i = 0; i < docs.length; i++) {
-            topTerms.add(new PriorityQueue<>(pseudoQueryTerms + 1, Comparator.comparingDouble(WeightedTerm::weight)));
+            topTerms.add(new PriorityQueue<>(Math.min(limit, 64) + 1, Comparator.comparingDouble(WeightedTerm::weight)));
         }
         final Terms terms = leaf.reader().terms(field);
         if (terms == null) {
             return topTerms;
         }
-        final long docCount = Math.max(reader.getDocCount(field), 1);
         final TermsEnum termsEnum = terms.iterator();
         PostingsEnum postings = null;
         for (BytesRef term = termsEnum.next(); term != null; term = termsEnum.next()) {
             postings = termsEnum.postings(postings, PostingsEnum.FREQS);
-            float idf = Float.NaN;
             for (int i = 0; i < docs.length; i++) {
                 int doc = postings.docID();
                 if (doc < docs[i]) {
@@ -335,14 +415,9 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
                 if (doc != docs[i]) {
                     continue;
                 }
-                if (Float.isNaN(idf)) {
-                    final long docFreq = reader.docFreq(new Term(field, term));
-                    idf = (float) Math.log(1 + (docCount - docFreq + 0.5) / (docFreq + 0.5));
-                }
-                final int freq = postings.freq();
-                final float weight = idf * freq / (freq + TERM_RANK_K1);
+                final float weight = weigher.weight(term, postings.freq());
                 final PriorityQueue<WeightedTerm> queue = topTerms.get(i);
-                if (queue.size() < pseudoQueryTerms) {
+                if (queue.size() < limit) {
                     queue.add(new WeightedTerm(BytesRef.deepCopyOf(term), weight));
                 } else if (weight > queue.peek().weight()) {
                     queue.poll();
@@ -377,20 +452,24 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
     }
 
     /**
-     * Returns the indexed float dense vector fields that hold the chunk embeddings of semantic fields, i.e. the nested dense vector
-     * fields under an inference field.
+     * Returns the indexed embedding fields that hold the chunk embeddings of semantic fields, i.e. the nested float dense vector and
+     * sparse vector fields under an inference field.
      */
-    private List<DenseVectorFieldType> semanticVectorFields() {
-        final List<DenseVectorFieldType> fields = new ArrayList<>();
+    private List<MappedFieldType> semanticEmbeddingFields() {
+        final List<MappedFieldType> fields = new ArrayList<>();
         if (mapperService == null) {
             return fields;
         }
         final MappingLookup lookup = mapperService.mappingLookup();
         for (String inferenceField : lookup.inferenceFields().keySet()) {
             for (String name : lookup.getMatchingFieldNames(inferenceField + ".*")) {
-                if (lookup.getFieldType(name) instanceof DenseVectorFieldType fieldType
-                    && fieldType.isSearchable()
-                    && lookup.nestedLookup().getNestedParent(name) != null) {
+                if (lookup.nestedLookup().getNestedParent(name) == null) {
+                    continue;
+                }
+                MappedFieldType mappedFieldType = lookup.getFieldType(name);
+                if (mappedFieldType instanceof SparseVectorFieldType sparseFieldType && sparseFieldType.isSearchable()) {
+                    fields.add(sparseFieldType);
+                } else if (mappedFieldType instanceof DenseVectorFieldType fieldType && fieldType.isSearchable()) {
                     switch (fieldType.getElementType()) {
                         case FLOAT, BFLOAT16 -> fields.add(fieldType);
                         case BYTE, BIT -> logger.debug(
@@ -484,6 +563,98 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
                 kept++;
             }
         }
+        return poolParameters(scores, scoreCount);
+    }
+
+    /**
+     * Calibrates a semantic field's sparse vector scores like {@link #estimateVector}: the token vectors of sampled chunks are used as
+     * pseudo-queries, each scoring its nearest {@link #VECTOR_NEIGHBORS} documents, excluding its own, with the nested max-over-chunks
+     * scoring that searches use. The query scores each token as query weight times document weight, as the sparse vector query does
+     * without pruning.
+     *
+     * @return the parameters, or {@code null} if no chunk on this shard could be scored
+     */
+    private BayesianScoreEstimator.Parameters estimateSparse(Engine.Searcher searcher, SparseVectorFieldType fieldType) throws IOException {
+        final String field = fieldType.name();
+        final MappingLookup lookup = mapperService.mappingLookup();
+        final String nestedPath = lookup.nestedLookup().getNestedParent(field);
+        final NestedObjectMapper chunks = lookup.nestedLookup().getNestedMappers().get(nestedPath);
+        final IndexSettings indexSettings = mapperService.getIndexSettings();
+        final BitSetProducer parentFilter = mapperService.parserContext()
+            .bitSetProducer(Queries.newNonNestedFilter(indexSettings.getIndexVersionCreated()));
+        final IndexReader reader = searcher.getIndexReader();
+        final List<LeafReaderContext> leaves = reader.leaves();
+
+        // Sample live chunk documents of the field's nested object, then read each chunk's full token vector
+        final Weight chunkFilter = searcher.createWeight(searcher.rewrite(chunks.nestedTypeFilter()), ScoreMode.COMPLETE_NO_SCORES, 1f);
+        final int[][] sampled = sampleDocs(leaves, leaf -> {
+            final Scorer scorer = chunkFilter.scorer(leaf);
+            return scorer == null ? null : scorer.iterator();
+        }, SPARSE_SAMPLES, SPARSE_SAMPLE_SEED);
+        if (sampled == null) {
+            return null;
+        }
+
+        // A chunk has a few hundred tokens at most; the clause limit only guards the pseudo-query's boolean query
+        final int maxTokens = IndexSearcher.getMaxClauseCount();
+        final float[] scores = new float[SPARSE_SAMPLES * VECTOR_NEIGHBORS];
+        int scoreCount = 0;
+        for (int i = 0; i < leaves.size(); i++) {
+            final int[] docs = sampled[i];
+            if (docs.length == 0) {
+                continue;
+            }
+            final LeafReaderContext leaf = leaves.get(i);
+            final BitSet parents = parentFilter.getBitSet(leaf);
+            final List<PriorityQueue<WeightedTerm>> vectors = collectTerms(
+                leaf,
+                field,
+                docs,
+                maxTokens,
+                (term, freq) -> XFeatureField.decodeFeatureValue(freq)
+            );
+            for (int d = 0; d < docs.length; d++) {
+                final PriorityQueue<WeightedTerm> tokens = vectors.get(d);
+                if (tokens.isEmpty()) {
+                    continue;
+                }
+                final int sourceParent = leaf.docBase + (parents == null ? docs[d] : parents.nextSetBit(docs[d]));
+                final BooleanQuery.Builder builder = new BooleanQuery.Builder();
+                for (WeightedTerm token : tokens) {
+                    builder.add(
+                        new BoostQuery(FeatureField.newLinearQuery(field, token.term().utf8ToString(), 1f), token.weight()),
+                        BooleanClause.Occur.SHOULD
+                    );
+                }
+                final Query query = new ESToParentBlockJoinQuery(
+                    builder.build(),
+                    parentFilter,
+                    org.apache.lucene.search.join.ScoreMode.Max,
+                    nestedPath
+                );
+                final TopDocs topDocs = searcher.search(query, VECTOR_NEIGHBORS + 1);
+                int kept = 0;
+                for (ScoreDoc hit : topDocs.scoreDocs) {
+                    if (kept == VECTOR_NEIGHBORS) {
+                        break;
+                    }
+                    if (hit.doc == sourceParent) {
+                        continue;
+                    }
+                    scores[scoreCount++] = hit.score;
+                    kept++;
+                }
+            }
+        }
+        return poolParameters(scores, scoreCount);
+    }
+
+    /**
+     * Turns pooled neighbor scores into sigmoid parameters: {@code beta = median} and {@code alpha = 1 / std}. No base rate is estimated.
+     *
+     * @return the parameters, or {@code null} if there are no scores
+     */
+    private static BayesianScoreEstimator.Parameters poolParameters(float[] scores, int scoreCount) {
         if (scoreCount == 0) {
             return null;
         }

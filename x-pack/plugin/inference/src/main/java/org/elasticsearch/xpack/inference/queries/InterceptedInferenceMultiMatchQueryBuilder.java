@@ -25,10 +25,7 @@ import org.elasticsearch.index.query.SearchExecutionContext;
 import org.elasticsearch.index.shard.BayesianBM25ShardParameters;
 import org.elasticsearch.inference.InferenceResults;
 import org.elasticsearch.inference.InferenceStringGroup;
-import org.elasticsearch.inference.TaskType;
 import org.elasticsearch.search.internal.MaxClauseCountQueryVisitor;
-import org.elasticsearch.xpack.core.ml.inference.results.TextExpansionResults;
-import org.elasticsearch.xpack.inference.mapper.SemanticFieldMapper;
 import org.elasticsearch.xpack.inference.mapper.SemanticTextField;
 
 import java.io.IOException;
@@ -115,10 +112,6 @@ public class InterceptedInferenceMultiMatchQueryBuilder extends InterceptedInfer
     protected void postInferenceCoordinatorNodeValidate(InferenceQueryUtils.InferenceInfo inferenceInfo) {
         if (inferenceInfo.inferenceFieldCount() > 0) {
             validateTypeSupportsInferenceFields();
-            if (originalQuery.type() == MultiMatchQueryBuilder.Type.BAYESIAN
-                && inferenceInfo.inferenceResultsMap().values().stream().anyMatch(TextExpansionResults.class::isInstance)) {
-                throw unsupportedSparseException();
-            }
         }
     }
 
@@ -144,7 +137,6 @@ public class InterceptedInferenceMultiMatchQueryBuilder extends InterceptedInfer
         validateTypeSupportsInferenceFields();
 
         if (originalQuery.type() == MultiMatchQueryBuilder.Type.BAYESIAN) {
-            validateNoSparseFields(inferenceFields.keySet(), indexMetadataContext);
             // The semantic clauses are fused with the lexical fields in doToQuery, once doRewriteIntercepted has rewritten them
             return this;
         }
@@ -213,7 +205,7 @@ public class InterceptedInferenceMultiMatchQueryBuilder extends InterceptedInfer
                     context,
                     "[multi_match] type [bayesian] has no vector calibration parameters for field ["
                         + field
-                        + "] on this shard; they are estimated for float dense embeddings, after the first merge"
+                        + "] on this shard; they are estimated for float dense and sparse embeddings, after the first merge"
                 );
             }
 
@@ -289,26 +281,6 @@ public class InterceptedInferenceMultiMatchQueryBuilder extends InterceptedInfer
             }
             case CROSS_FIELDS, PHRASE, PHRASE_PREFIX, BOOL_PREFIX -> throw unsupportedTypeException();
         }
-    }
-
-    /**
-     * Throws if any of the fields is backed by a sparse embedding endpoint: sparse scores are unbounded, but log-odds fusion needs
-     * probabilities, and there is no calibration for them yet.
-     */
-    private static void validateNoSparseFields(Iterable<String> inferenceFields, QueryRewriteContext indexMetadataContext) {
-        for (String field : inferenceFields) {
-            if (indexMetadataContext.getFieldType(field) instanceof SemanticFieldMapper.SemanticFieldType semanticFieldType
-                && semanticFieldType.getModelSettings() != null
-                && semanticFieldType.getModelSettings().taskType() == TaskType.SPARSE_EMBEDDING) {
-                throw unsupportedSparseException();
-            }
-        }
-    }
-
-    private static IllegalArgumentException unsupportedSparseException() {
-        return new IllegalArgumentException(
-            "[" + MultiMatchQueryBuilder.NAME + "] query type [bayesian] does not support sparse embedding semantic_text fields"
-        );
     }
 
     private IllegalArgumentException unsupportedTypeException() {

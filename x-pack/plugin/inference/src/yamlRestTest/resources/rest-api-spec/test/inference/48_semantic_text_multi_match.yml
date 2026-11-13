@@ -190,8 +190,27 @@ setup:
 
   - match: { error.root_cause.0.reason: "/.*\\[cross_fields\\]\\sis\\snot\\ssupported\\swhen\\squerying\\ssemantic_text\\sfields.*/" }
 
+---
+"Query a sparse semantic_text field using the bayesian type":
+  - skip:
+      features: [ "headers" ]
+
+  # Only the semantic field is queried: fusing it with text fields needs Bayesian BM25 parameters, which are estimated after a merge
+  # The semantic field's sparse scores are calibrated per shard from its own chunks' token vectors, which needs at least two docs because
+  # each sampled chunk's own doc is excluded. Both docs are indexed in one refresh so that a single estimate sees them both.
   - do:
-      catch: bad_request
+      bulk:
+        refresh: true
+        body:
+          - '{"index": {"_index": "test-sparse-index", "_id": "doc_1"}}'
+          - '{"inference_field": "It was a beautiful game"}'
+          - '{"index": {"_index": "test-sparse-index", "_id": "doc_2"}}'
+          - '{"inference_field": "The match ended in a draw"}'
+
+  - do:
+      headers:
+        # Force JSON content type so that we use a parser that interprets the floating-point score as a double
+        Content-Type: application/json
       search:
         index: test-sparse-index
         body:
@@ -199,9 +218,15 @@ setup:
             multi_match:
               query: "soccer"
               type: bayesian
-              fields: [ "inference_field", "non_inference_field" ]
+              fields: [ "inference_field" ]
 
-  - match: { error.root_cause.0.reason: "/.*\\[bayesian\\]\\sdoes\\snot\\ssupport\\ssparse\\sembedding\\ssemantic_text\\sfields.*/" }
+  # The test sparse service derives token weights from hash codes (around 1e9), so the calibrated probabilities can saturate to 0 or 1;
+  # only check that the query is accepted and scores are probabilities
+  - match: { hits.total.value: 2 }
+  - gte: { hits.hits.0._score: 0.0 }
+  - lte: { hits.hits.0._score: 1.0 }
+  - gte: { hits.hits.1._score: 0.0 }
+  - lte: { hits.hits.1._score: 1.0 }
 
 ---
 "Query a dense semantic_text field using the bayesian type":

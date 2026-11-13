@@ -27,7 +27,7 @@ import org.apache.lucene.document.FeatureField;
 public final class XFeatureField {
     static final int MAX_FREQ = Float.floatToIntBits(Float.MAX_VALUE) >>> 15;
 
-    static float decodeFeatureValue(float freq) {
+    public static float decodeFeatureValue(float freq) {
         if (freq > MAX_FREQ) {
             // This is never used in practice but callers of the SimScorer API might
             // occasionally call it on eg. Float.MAX_VALUE to compute the max score
