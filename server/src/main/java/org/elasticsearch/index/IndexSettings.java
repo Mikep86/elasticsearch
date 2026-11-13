@@ -12,6 +12,7 @@ import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.util.Strings;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.MergePolicy;
+import org.apache.lucene.search.IndexSearcher;
 import org.apache.lucene.search.uhighlight.UnifiedHighlighter;
 import org.elasticsearch.Build;
 import org.elasticsearch.action.bulk.BatchIndexingEnabled;
@@ -1224,6 +1225,16 @@ public final class IndexSettings {
     public static final Setting<Boolean> BAYESIAN_BM25_ESTIMATE_ON_MERGE = Setting.boolSetting(
         "index.bayesian_bm25.estimate_on_merge",
         true,
+        Property.IndexScope,
+        Property.Final
+    );
+
+    /** Number of a sampled document's top terms that form the pseudo-query used to estimate Bayesian BM25 parameters. */
+    public static final Setting<Integer> BAYESIAN_BM25_PSEUDO_QUERY_TERMS = Setting.intSetting(
+        "index.bayesian_bm25.pseudo_query_terms",
+        10,
+        1,
+        IndexSearcher.getMaxClauseCount(),
         Property.IndexScope,
         Property.Final
     );

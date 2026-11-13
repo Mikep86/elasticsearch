@@ -479,7 +479,13 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
         this.refreshPendingLocationListener = new RefreshPendingLocationListener();
         this.refreshFieldHasValueListener = new RefreshFieldHasValueListener();
         this.bayesianBM25ShardEstimator = IndexSettings.BAYESIAN_BM25_ESTIMATE_ON_MERGE.get(indexSettings.getSettings())
-            ? new BayesianBM25ShardEstimator(shardId, this::getEngine, mapperService, threadPool.generic())
+            ? new BayesianBM25ShardEstimator(
+                shardId,
+                this::getEngine,
+                mapperService,
+                threadPool.generic(),
+                IndexSettings.BAYESIAN_BM25_PSEUDO_QUERY_TERMS.get(indexSettings.getSettings())
+            )
             : null;
         this.relativeTimeInNanosSupplier = relativeTimeInNanosSupplier;
         this.indexCommitListener = indexCommitListener;

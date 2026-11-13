@@ -13,18 +13,33 @@ import org.apache.lucene.index.FieldInfo;
 import org.apache.lucene.index.FieldInfos;
 import org.apache.lucene.index.FloatVectorValues;
 import org.apache.lucene.index.IndexOptions;
+import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.LeafReaderContext;
+import org.apache.lucene.index.NumericDocValues;
+import org.apache.lucene.index.PostingsEnum;
 import org.apache.lucene.index.ReaderUtil;
 import org.apache.lucene.index.SegmentReader;
+import org.apache.lucene.index.Term;
+import org.apache.lucene.index.Terms;
+import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.search.BayesianScoreEstimator;
+import org.apache.lucene.search.BooleanClause;
+import org.apache.lucene.search.BooleanQuery;
+import org.apache.lucene.search.DocIdSetIterator;
 import org.apache.lucene.search.Query;
 import org.apache.lucene.search.ReferenceManager;
 import org.apache.lucene.search.ScoreDoc;
+import org.apache.lucene.search.ScoreMode;
+import org.apache.lucene.search.Scorer;
+import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TopDocs;
+import org.apache.lucene.search.Weight;
 import org.apache.lucene.search.join.BitSetProducer;
 import org.apache.lucene.store.AlreadyClosedException;
 import org.apache.lucene.util.BitSet;
+import org.apache.lucene.util.Bits;
+import org.apache.lucene.util.BytesRef;
 import org.elasticsearch.common.lucene.Lucene;
 import org.elasticsearch.common.lucene.search.Queries;
 import org.elasticsearch.index.IndexSettings;
@@ -41,10 +56,12 @@ import org.elasticsearch.search.vectors.VectorData;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.PriorityQueue;
 import java.util.Random;
 import java.util.Set;
 import java.util.concurrent.Executor;
@@ -53,6 +70,8 @@ import java.util.function.Supplier;
 
 /**
  * Estimates Bayesian BM25 parameters for the full-text fields of a shard whenever a refresh makes a newly merged segment visible.
+ * Text fields are calibrated with document-derived pseudo-queries: each sampled document is scored against its own top terms, which
+ * gives a realistic strong-match score that anchors the sigmoid. No base rate is estimated.
  * It also estimates sigmoid calibration parameters for the dense vector fields of semantic fields, so that their scores can be fused
  * with the calibrated BM25 scores. The estimate runs asynchronously, at most one at a time, against the shard-wide searcher so that it
  * sees the same term statistics as queries do.
@@ -69,19 +88,36 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
     private static final int VECTOR_NUM_CANDIDATES = Math.round(1.5f * (VECTOR_NEIGHBORS + 1));
     private static final long VECTOR_SAMPLE_SEED = 42;
 
+    /** Number of documents sampled as pseudo-query sources when calibrating a text field. */
+    private static final int TEXT_DOC_SAMPLES = 200;
+    private static final long TEXT_SAMPLE_SEED = 42;
+    /** Saturation used to rank a document's terms; the document's length is the same for all of its terms, so it is left out. */
+    private static final float TERM_RANK_K1 = 1.2f;
+    /** Probabilities that a zero score and the median strong-match score map to. */
+    private static final double P_LO = 0.05;
+    private static final double P_HI = 0.95;
+
     private final ShardId shardId;
     private final Supplier<Engine> engineSupplier;
     private final MapperService mapperService;
     private final Executor executor;
+    private final int pseudoQueryTerms;
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicBoolean pending = new AtomicBoolean();
     private volatile BayesianBM25ShardParameters parameters;
 
-    BayesianBM25ShardEstimator(ShardId shardId, Supplier<Engine> engineSupplier, MapperService mapperService, Executor executor) {
+    BayesianBM25ShardEstimator(
+        ShardId shardId,
+        Supplier<Engine> engineSupplier,
+        MapperService mapperService,
+        Executor executor,
+        int pseudoQueryTerms
+    ) {
         this.shardId = shardId;
         this.engineSupplier = engineSupplier;
         this.mapperService = mapperService;
         this.executor = executor;
+        this.pseudoQueryTerms = pseudoQueryTerms;
     }
 
     BayesianBM25ShardParameters parameters() {
@@ -142,7 +178,12 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
             final Map<String, BayesianScoreEstimator.Parameters> byField = new HashMap<>();
             for (String field : fullTextFields(FieldInfos.getMergedFieldInfos(searcher.getIndexReader()))) {
                 try {
-                    byField.put(field, BayesianScoreEstimator.estimate(searcher, field));
+                    BayesianScoreEstimator.Parameters textParameters = estimateText(searcher, field);
+                    if (textParameters != null) {
+                        byField.put(field, textParameters);
+                    } else {
+                        logger.debug("[{}] no documents to estimate Bayesian BM25 parameters for field [{}]", shardId, field);
+                    }
                 } catch (IOException | RuntimeException e) {
                     logger.warn("[{}] failed to estimate Bayesian BM25 parameters for field [{}]", shardId, field, e);
                 }
@@ -159,6 +200,180 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
             }
             parameters = new BayesianBM25ShardParameters(segmentNames, byField);
         }
+    }
+
+    /**
+     * Calibrates a text field with document-derived pseudo-queries: each sampled document is scored against a query made of its own
+     * top {@link #pseudoQueryTerms} terms. The median of those scores is the strong-match score {@code max}, and the range
+     * {@code [0, max]} is mapped to the probabilities {@code [P_LO, P_HI]}. No base rate is estimated.
+     *
+     * @return the parameters, or {@code null} if no document on this shard could be scored
+     */
+    private BayesianScoreEstimator.Parameters estimateText(Engine.Searcher searcher, String field) throws IOException {
+        final IndexReader reader = searcher.getIndexReader();
+        final List<LeafReaderContext> leaves = reader.leaves();
+
+        final long[] leafStarts = new long[leaves.size() + 1];
+        for (int i = 0; i < leaves.size(); i++) {
+            leafStarts[i + 1] = leafStarts[i] + countLiveDocsWithField(leaves.get(i), field);
+        }
+        final long total = leafStarts[leaves.size()];
+        if (total == 0) {
+            return null;
+        }
+
+        // Sample distinct positions among the live documents that have the field, then score each sampled document
+        final int sampleCount = (int) Math.min(TEXT_DOC_SAMPLES, total);
+        final long[] sampled = new Random(TEXT_SAMPLE_SEED).longs(0, total).distinct().limit(sampleCount).sorted().toArray();
+        final float[] scores = new float[sampleCount];
+        int scoreCount = 0;
+        int next = 0;
+        for (int i = 0; i < leaves.size() && next < sampleCount; i++) {
+            int end = next;
+            while (end < sampleCount && sampled[end] < leafStarts[i + 1]) {
+                end++;
+            }
+            if (end == next) {
+                continue;
+            }
+            final LeafReaderContext leaf = leaves.get(i);
+            final int[] docs = sampledDocs(leaf, field, Arrays.copyOfRange(sampled, next, end), leafStarts[i]);
+            next = end;
+            final List<PriorityQueue<WeightedTerm>> topTerms = topTerms(reader, leaf, field, docs);
+            for (int d = 0; d < docs.length; d++) {
+                final float score = scoreOwnTerms(searcher, leaf, field, docs[d], topTerms.get(d));
+                if (score > 0) {
+                    scores[scoreCount++] = score;
+                }
+            }
+        }
+        if (scoreCount == 0) {
+            return null;
+        }
+
+        final float[] pooled = Arrays.copyOf(scores, scoreCount);
+        Arrays.sort(pooled);
+        final float max = pooled[pooled.length / 2];
+        final float alpha = (float) ((logit(P_HI) - logit(P_LO)) / max);
+        final float beta = (float) (max - logit(P_HI) / alpha);
+        return new BayesianScoreEstimator.Parameters(alpha, beta, 0f);
+    }
+
+    private static double logit(double p) {
+        return Math.log(p / (1 - p));
+    }
+
+    /** Counts the live documents of the leaf that have norms, i.e. a value, for the field. */
+    private static long countLiveDocsWithField(LeafReaderContext leaf, String field) throws IOException {
+        final NumericDocValues norms = leaf.reader().getNormValues(field);
+        if (norms == null) {
+            return 0;
+        }
+        final Bits liveDocs = leaf.reader().getLiveDocs();
+        long count = 0;
+        for (int doc = norms.nextDoc(); doc != DocIdSetIterator.NO_MORE_DOCS; doc = norms.nextDoc()) {
+            if (liveDocs == null || liveDocs.get(doc)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    /**
+     * Resolves sorted shard-wide sample positions to the leaf's doc ids, counting only live documents that have the field, in the
+     * same order as {@link #countLiveDocsWithField}.
+     */
+    private static int[] sampledDocs(LeafReaderContext leaf, String field, long[] positions, long leafStart) throws IOException {
+        final NumericDocValues norms = leaf.reader().getNormValues(field);
+        final Bits liveDocs = leaf.reader().getLiveDocs();
+        final int[] docs = new int[positions.length];
+        int next = 0;
+        long position = leafStart;
+        for (int doc = norms.nextDoc(); doc != DocIdSetIterator.NO_MORE_DOCS && next < positions.length; doc = norms.nextDoc()) {
+            if (liveDocs != null && liveDocs.get(doc) == false) {
+                continue;
+            }
+            if (position == positions[next]) {
+                docs[next++] = doc;
+            }
+            position++;
+        }
+        assert next == positions.length : "resolved " + next + " of " + positions.length + " sampled documents";
+        return docs;
+    }
+
+    private record WeightedTerm(BytesRef term, float weight) {}
+
+    /**
+     * Finds the top {@link #pseudoQueryTerms} terms of each of the leaf's sorted documents in one pass over the field's terms,
+     * ranked by {@code idf * tf / (tf + k1)}. Each queue is a min-heap on the weight.
+     */
+    private List<PriorityQueue<WeightedTerm>> topTerms(IndexReader reader, LeafReaderContext leaf, String field, int[] docs)
+        throws IOException {
+        final List<PriorityQueue<WeightedTerm>> topTerms = new ArrayList<>(docs.length);
+        for (int i = 0; i < docs.length; i++) {
+            topTerms.add(new PriorityQueue<>(pseudoQueryTerms + 1, Comparator.comparingDouble(WeightedTerm::weight)));
+        }
+        final Terms terms = leaf.reader().terms(field);
+        if (terms == null) {
+            return topTerms;
+        }
+        final long docCount = Math.max(reader.getDocCount(field), 1);
+        final TermsEnum termsEnum = terms.iterator();
+        PostingsEnum postings = null;
+        for (BytesRef term = termsEnum.next(); term != null; term = termsEnum.next()) {
+            postings = termsEnum.postings(postings, PostingsEnum.FREQS);
+            float idf = Float.NaN;
+            for (int i = 0; i < docs.length; i++) {
+                int doc = postings.docID();
+                if (doc < docs[i]) {
+                    doc = postings.advance(docs[i]);
+                }
+                if (doc == DocIdSetIterator.NO_MORE_DOCS) {
+                    break;
+                }
+                if (doc != docs[i]) {
+                    continue;
+                }
+                if (Float.isNaN(idf)) {
+                    final long docFreq = reader.docFreq(new Term(field, term));
+                    idf = (float) Math.log(1 + (docCount - docFreq + 0.5) / (docFreq + 0.5));
+                }
+                final int freq = postings.freq();
+                final float weight = idf * freq / (freq + TERM_RANK_K1);
+                final PriorityQueue<WeightedTerm> queue = topTerms.get(i);
+                if (queue.size() < pseudoQueryTerms) {
+                    queue.add(new WeightedTerm(BytesRef.deepCopyOf(term), weight));
+                } else if (weight > queue.peek().weight()) {
+                    queue.poll();
+                    queue.add(new WeightedTerm(BytesRef.deepCopyOf(term), weight));
+                }
+            }
+        }
+        return topTerms;
+    }
+
+    /** Returns the score the document gets for a disjunction of the given terms, using the field's similarity, or 0 if none match. */
+    private static float scoreOwnTerms(
+        Engine.Searcher searcher,
+        LeafReaderContext leaf,
+        String field,
+        int doc,
+        PriorityQueue<WeightedTerm> terms
+    ) throws IOException {
+        if (terms.isEmpty()) {
+            return 0f;
+        }
+        final BooleanQuery.Builder builder = new BooleanQuery.Builder();
+        for (WeightedTerm term : terms) {
+            builder.add(new TermQuery(new Term(field, term.term())), BooleanClause.Occur.SHOULD);
+        }
+        final Weight weight = searcher.createWeight(searcher.rewrite(builder.build()), ScoreMode.COMPLETE, 1f);
+        final Scorer scorer = weight.scorer(leaf);
+        if (scorer == null || scorer.iterator().advance(doc) != doc) {
+            return 0f;
+        }
+        return scorer.score();
     }
 
     /**
