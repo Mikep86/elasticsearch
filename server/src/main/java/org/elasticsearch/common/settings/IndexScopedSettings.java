@@ -230,7 +230,8 @@ public final class IndexScopedSettings extends AbstractScopedSettings {
                 InferenceMetadataFieldsMapper.USE_LEGACY_SEMANTIC_TEXT_FORMAT,
                 IndexSettings.USE_ES_812_POSTINGS_FORMAT,
                 IndexSettings.BAYESIAN_BM25_ESTIMATE_ON_MERGE,
-                IndexSettings.BAYESIAN_BM25_PSEUDO_QUERY_TERMS,
+                IndexSettings.BAYESIAN_BM25_N_SAMPLES,
+                IndexSettings.BAYESIAN_BM25_TOKENS_PER_QUERY,
                 IndexSettings.USE_DOC_VALUES_SKIPPER,
                 IndexSettings.INTRA_MERGE_PARALLELISM_ENABLED_SETTING,
 
