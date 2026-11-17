@@ -1229,19 +1229,10 @@ public final class IndexSettings {
         Property.Final
     );
 
-    /** Number of pseudo-queries sampled to estimate Bayesian BM25 parameters of a text field. */
-    public static final Setting<Integer> BAYESIAN_BM25_N_SAMPLES = Setting.intSetting(
-        "index.bayesian_bm25.n_samples",
-        200,
-        1,
-        Property.IndexScope,
-        Property.Final
-    );
-
-    /** Number of vocabulary terms in each pseudo-query used to estimate Bayesian BM25 parameters of a text field. */
-    public static final Setting<Integer> BAYESIAN_BM25_TOKENS_PER_QUERY = Setting.intSetting(
-        "index.bayesian_bm25.tokens_per_query",
-        5,
+    /** Number of a sampled document's top terms that form the pseudo-query used to estimate Bayesian BM25 parameters. */
+    public static final Setting<Integer> BAYESIAN_BM25_PSEUDO_QUERY_TERMS = Setting.intSetting(
+        "index.bayesian_bm25.pseudo_query_terms",
+        10,
         1,
         IndexSearcher.getMaxClauseCount(),
         Property.IndexScope,

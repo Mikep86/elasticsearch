@@ -148,8 +148,9 @@ public class MultiMatchQueryParser extends MatchQueryParser {
         Map<Query, Float> additionalClauses
     ) throws IOException {
         final BayesianBM25ShardParameters shardParameters = context.getBayesianBM25Parameters();
-        final List<Query> clauses = new ArrayList<>();
+        final List<Query> fieldQueries = new ArrayList<>();
         final List<Float> boosts = new ArrayList<>();
+        BayesianScoreEstimator.Parameters anchor = null;
 
         for (Map.Entry<String, Float> entry : fieldNames.entrySet()) {
             String fieldName = entry.getKey();
@@ -174,8 +175,18 @@ public class MultiMatchQueryParser extends MatchQueryParser {
                 );
             }
 
-            clauses.add(new BayesianScoreQuery(query, parameters.alpha(), parameters.beta(), parameters.baseRate()));
+            if (anchor == null || parameters.alpha() < anchor.alpha()) {
+                anchor = parameters;
+            }
+            fieldQueries.add(query);
             boosts.add(entry.getValue() == null ? AbstractQueryBuilder.DEFAULT_BOOST : entry.getValue());
+        }
+
+        // All text fields share the flattest field's calibration: per-field anchors scale with field length rather than relevance,
+        // so calibrating each field on its own skews the fusion towards some fields.
+        final List<Query> clauses = new ArrayList<>();
+        for (Query query : fieldQueries) {
+            clauses.add(new BayesianScoreQuery(query, anchor.alpha(), anchor.beta(), anchor.baseRate()));
         }
 
         for (Map.Entry<Query, Float> entry : additionalClauses.entrySet()) {
