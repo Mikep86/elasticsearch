@@ -18,6 +18,7 @@ import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
 import org.apache.lucene.index.KnnVectorValues;
 import org.apache.lucene.index.LeafReaderContext;
+import org.apache.lucene.index.MultiTerms;
 import org.apache.lucene.index.PostingsEnum;
 import org.apache.lucene.index.ReaderUtil;
 import org.apache.lucene.index.SegmentReader;
@@ -35,9 +36,14 @@ import org.apache.lucene.search.ReferenceManager;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.ScoreMode;
 import org.apache.lucene.search.Scorer;
+import org.apache.lucene.search.TermStatistics;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.search.Weight;
 import org.apache.lucene.search.join.BitSetProducer;
+import org.apache.lucene.search.similarities.BM25Similarity;
+import org.apache.lucene.search.similarities.PerFieldSimilarityWrapper;
+import org.apache.lucene.search.similarities.Similarity;
+import org.apache.lucene.search.similarities.Similarity.SimScorer;
 import org.apache.lucene.store.AlreadyClosedException;
 import org.apache.lucene.util.BitSet;
 import org.apache.lucene.util.Bits;
@@ -55,8 +61,10 @@ import org.elasticsearch.index.mapper.vectors.DenseVectorFieldMapper.DenseVector
 import org.elasticsearch.index.mapper.vectors.SparseVectorFieldMapper.SparseVectorFieldType;
 import org.elasticsearch.index.mapper.vectors.XFeatureField;
 import org.elasticsearch.index.search.ESToParentBlockJoinQuery;
+import org.elasticsearch.index.similarity.SimilarityService;
 import org.elasticsearch.logging.LogManager;
 import org.elasticsearch.logging.Logger;
+import org.elasticsearch.lucene.similarity.LegacyBM25Similarity;
 import org.elasticsearch.search.vectors.VectorData;
 
 import java.io.IOException;
@@ -76,7 +84,7 @@ import java.util.function.Supplier;
 
 /**
  * Estimates Bayesian BM25 parameters for the full-text fields of a shard whenever a refresh makes a newly merged segment visible.
- * Text fields are calibrated with Lucene's {@link BayesianScoreEstimator}, which scores pseudo-queries made of sampled vocabulary terms.
+ * Text fields are calibrated in units of their mean token idf, falling back to Lucene's {@link BayesianScoreEstimator}.
  * It also estimates sigmoid calibration parameters for the dense and sparse vector fields of semantic fields, so that their scores can be
  * fused with the calibrated BM25 scores; dense fields use a two-pool logistic fit over sampled vectors' neighbors and random documents,
  * and sparse fields use the median and spread of sampled chunks' neighbor scores.
@@ -108,6 +116,13 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
     private static final long SPARSE_SAMPLE_SEED = 42;
 
     private static final long TEXT_SAMPLE_SEED = 42;
+    /**
+     * Text calibration constants in units of the field's mean token idf {@code mu}: {@code alpha = TEXT_SLOPE / mu} and
+     * {@code beta = TEXT_MIDPOINT * mu}. They map a score of zero to 0.05 and the score of a query of 10 typical tokens matching fully to
+     * 0.95, i.e. {@code 2 ln 19 / 10} and {@code 10 / 2}.
+     */
+    private static final double TEXT_SLOPE = 2 * Math.log(19) / 10;
+    private static final double TEXT_MIDPOINT = 5;
 
     private final ShardId shardId;
     private final Supplier<Engine> engineSupplier;
@@ -193,7 +208,12 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
             final Map<String, BayesianScoreEstimator.Parameters> byField = new HashMap<>();
             for (String field : fullTextFields(FieldInfos.getMergedFieldInfos(searcher.getIndexReader()))) {
                 try {
-                    byField.put(field, BayesianScoreEstimator.estimate(searcher, field, nSamples, tokensPerQuery, TEXT_SAMPLE_SEED));
+                    BayesianScoreEstimator.Parameters textParameters = estimateText(searcher, field);
+                    if (textParameters == null) {
+                        logger.debug("[{}] falling back to Lucene's Bayesian BM25 estimator for field [{}]", shardId, field);
+                        textParameters = BayesianScoreEstimator.estimate(searcher, field, nSamples, tokensPerQuery, TEXT_SAMPLE_SEED);
+                    }
+                    byField.put(field, textParameters);
                 } catch (IOException | RuntimeException e) {
                     logger.warn("[{}] failed to estimate Bayesian BM25 parameters for field [{}]", shardId, field, e);
                 }
@@ -382,6 +402,70 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
             }
         }
         return fields;
+    }
+
+    /**
+     * Calibrates a text field in units of {@code mu}, the largest score a token drawn at random from the field's text can contribute, so
+     * that the calibration does not change when a field's scores are all scaled, and a typical matching token is worth the same in every
+     * field. The unit has to be measured in the field similarity's own scores: Elasticsearch's default {@link LegacyBM25Similarity}
+     * scores {@code k1 + 1} times higher than Lucene's {@link BM25Similarity}. A token's largest contribution is its BM25 idf times that
+     * similarity's constant factor, so {@code mu} is the token-weighted mean idf times the factor.
+     * No base rate: log-odds fusion adds each clause's log-odds, so a prior in every clause would be counted once per clause.
+     *
+     * @return the parameters, or {@code null} if the field has no terms on this shard or is not scored with BM25
+     */
+    private static BayesianScoreEstimator.Parameters estimateText(IndexSearcher searcher, String field) throws IOException {
+        Similarity similarity = searcher.getSimilarity();
+        if (similarity instanceof PerFieldSimilarityWrapper perField) {
+            // the per-field similarity comes wrapped in a guard against zero norms
+            similarity = SimilarityService.unwrap(perField.get(field));
+        }
+        if (similarity instanceof BM25Similarity == false && similarity instanceof LegacyBM25Similarity == false) {
+            return null;
+        }
+        final IndexReader reader = searcher.getIndexReader();
+        final Terms terms = MultiTerms.getTerms(reader, field);
+        final int docCount = reader.getDocCount(field);
+        if (terms == null || docCount == 0) {
+            return null;
+        }
+        double weightedIdf = 0;
+        double totalTermFreq = 0;
+        BytesRef referenceTerm = null;
+        int referenceDocFreq = 0;
+        long referenceTermFreq = 0;
+        final TermsEnum termsEnum = terms.iterator();
+        for (BytesRef term = termsEnum.next(); term != null; term = termsEnum.next()) {
+            final int docFreq = termsEnum.docFreq();
+            final long termFreq = termsEnum.totalTermFreq();
+            weightedIdf += termFreq * bm25Idf(docFreq, docCount);
+            totalTermFreq += termFreq;
+            if (referenceTerm == null) {
+                referenceTerm = BytesRef.deepCopyOf(term);
+                referenceDocFreq = docFreq;
+                referenceTermFreq = termFreq;
+            }
+        }
+        if (totalTermFreq == 0 || weightedIdf <= 0) {
+            return null;
+        }
+        // The similarity's largest score for one term, at unbounded term frequency, divided by the term's idf
+        final SimScorer scorer = similarity.scorer(
+            1f,
+            searcher.collectionStatistics(field),
+            new TermStatistics(referenceTerm, referenceDocFreq, referenceTermFreq)
+        );
+        final double scale = scorer.score(Float.MAX_VALUE, 1L) / bm25Idf(referenceDocFreq, docCount);
+        if (Double.isFinite(scale) == false || scale <= 0) {
+            return null;
+        }
+        final double mu = scale * weightedIdf / totalTermFreq;
+        return new BayesianScoreEstimator.Parameters((float) (TEXT_SLOPE / mu), (float) (TEXT_MIDPOINT * mu), 0f);
+    }
+
+    /** BM25's idf, as {@link BM25Similarity} computes it. */
+    private static double bm25Idf(long docFreq, long docCount) {
+        return Math.log(1 + (docCount - docFreq + 0.5) / (docFreq + 0.5));
     }
 
     /**
