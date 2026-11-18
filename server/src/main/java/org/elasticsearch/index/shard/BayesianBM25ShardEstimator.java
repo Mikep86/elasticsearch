@@ -20,7 +20,6 @@ import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.PostingsEnum;
 import org.apache.lucene.index.ReaderUtil;
 import org.apache.lucene.index.SegmentReader;
-import org.apache.lucene.index.Term;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.search.BayesianScoreEstimator;
@@ -34,7 +33,6 @@ import org.apache.lucene.search.ReferenceManager;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.ScoreMode;
 import org.apache.lucene.search.Scorer;
-import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.search.Weight;
 import org.apache.lucene.search.join.BitSetProducer;
@@ -76,8 +74,7 @@ import java.util.function.Supplier;
 
 /**
  * Estimates Bayesian BM25 parameters for the full-text fields of a shard whenever a refresh makes a newly merged segment visible.
- * Text fields are calibrated with document-derived pseudo-queries: each sampled document is scored against its own top terms, which
- * gives a realistic strong-match score that anchors the sigmoid. No base rate is estimated.
+ * Text fields are calibrated with Lucene's {@link BayesianScoreEstimator}, which scores pseudo-queries made of sampled vocabulary terms.
  * It also estimates sigmoid calibration parameters for the dense and sparse vector fields of semantic fields, so that their scores can be
  * fused with the calibrated BM25 scores; sparse fields are calibrated like dense ones, with sampled chunks' token vectors as pseudo-queries.
  * The estimate runs asynchronously, at most one at a time, against the shard-wide searcher so that it sees the same term statistics as
@@ -99,20 +96,14 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
     private static final int SPARSE_SAMPLES = 200;
     private static final long SPARSE_SAMPLE_SEED = 42;
 
-    /** Number of documents sampled as pseudo-query sources when calibrating a text field. */
-    private static final int TEXT_DOC_SAMPLES = 200;
     private static final long TEXT_SAMPLE_SEED = 42;
-    /** Saturation used to rank a document's terms; the document's length is the same for all of its terms, so it is left out. */
-    private static final float TERM_RANK_K1 = 1.2f;
-    /** Probabilities that a zero score and the median strong-match score map to. */
-    private static final double P_LO = 0.05;
-    private static final double P_HI = 0.95;
 
     private final ShardId shardId;
     private final Supplier<Engine> engineSupplier;
     private final MapperService mapperService;
     private final Executor executor;
-    private final int pseudoQueryTerms;
+    private final int nSamples;
+    private final int tokensPerQuery;
     private final AtomicBoolean running = new AtomicBoolean();
     private final AtomicBoolean pending = new AtomicBoolean();
     private volatile BayesianBM25ShardParameters parameters;
@@ -122,13 +113,15 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
         Supplier<Engine> engineSupplier,
         MapperService mapperService,
         Executor executor,
-        int pseudoQueryTerms
+        int nSamples,
+        int tokensPerQuery
     ) {
         this.shardId = shardId;
         this.engineSupplier = engineSupplier;
         this.mapperService = mapperService;
         this.executor = executor;
-        this.pseudoQueryTerms = pseudoQueryTerms;
+        this.nSamples = nSamples;
+        this.tokensPerQuery = tokensPerQuery;
     }
 
     BayesianBM25ShardParameters parameters() {
@@ -189,12 +182,7 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
             final Map<String, BayesianScoreEstimator.Parameters> byField = new HashMap<>();
             for (String field : fullTextFields(FieldInfos.getMergedFieldInfos(searcher.getIndexReader()))) {
                 try {
-                    BayesianScoreEstimator.Parameters textParameters = estimateText(searcher, field);
-                    if (textParameters != null) {
-                        byField.put(field, textParameters);
-                    } else {
-                        logger.debug("[{}] no documents to estimate Bayesian BM25 parameters for field [{}]", shardId, field);
-                    }
+                    byField.put(field, BayesianScoreEstimator.estimate(searcher, field, nSamples, tokensPerQuery, TEXT_SAMPLE_SEED));
                 } catch (IOException | RuntimeException e) {
                     logger.warn("[{}] failed to estimate Bayesian BM25 parameters for field [{}]", shardId, field, e);
                 }
@@ -215,55 +203,6 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
             }
             parameters = new BayesianBM25ShardParameters(segmentNames, byField);
         }
-    }
-
-    /**
-     * Calibrates a text field with document-derived pseudo-queries: each sampled document is scored against a query made of its own
-     * top {@link #pseudoQueryTerms} terms. The median of those scores is the strong-match score {@code max}, and the range
-     * {@code [0, max]} is mapped to the probabilities {@code [P_LO, P_HI]}. No base rate is estimated.
-     *
-     * @return the parameters, or {@code null} if no document on this shard could be scored
-     */
-    private BayesianScoreEstimator.Parameters estimateText(Engine.Searcher searcher, String field) throws IOException {
-        final IndexReader reader = searcher.getIndexReader();
-        final List<LeafReaderContext> leaves = reader.leaves();
-
-        // Sample live documents that have the field, i.e. have norms, then score each one against its own top terms
-        final int[][] sampled = sampleDocs(leaves, leaf -> leaf.reader().getNormValues(field), TEXT_DOC_SAMPLES, TEXT_SAMPLE_SEED);
-        if (sampled == null) {
-            return null;
-        }
-        final TermWeigher weigher = new IdfWeigher(reader, field);
-        final float[] scores = new float[TEXT_DOC_SAMPLES];
-        int scoreCount = 0;
-        for (int i = 0; i < leaves.size(); i++) {
-            final int[] docs = sampled[i];
-            if (docs.length == 0) {
-                continue;
-            }
-            final LeafReaderContext leaf = leaves.get(i);
-            final List<PriorityQueue<WeightedTerm>> topTerms = collectTerms(leaf, field, docs, pseudoQueryTerms, weigher);
-            for (int d = 0; d < docs.length; d++) {
-                final float score = scoreOwnTerms(searcher, leaf, field, docs[d], topTerms.get(d));
-                if (score > 0) {
-                    scores[scoreCount++] = score;
-                }
-            }
-        }
-        if (scoreCount == 0) {
-            return null;
-        }
-
-        final float[] pooled = Arrays.copyOf(scores, scoreCount);
-        Arrays.sort(pooled);
-        final float max = pooled[pooled.length / 2];
-        final float alpha = (float) ((logit(P_HI) - logit(P_LO)) / max);
-        final float beta = (float) (max - logit(P_HI) / alpha);
-        return new BayesianScoreEstimator.Parameters(alpha, beta, 0f);
-    }
-
-    private static double logit(double p) {
-        return Math.log(p / (1 - p));
     }
 
     /** Returns, for one leaf, an iterator over the documents that have a value for a field, or {@code null} if none do. */
@@ -354,34 +293,6 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
     }
 
     /**
-     * Weighs text terms by {@code idf * tf / (tf + k1)}. The shard-wide idf is computed once per term: terms arrive in order, each one
-     * for every sampled document that contains it.
-     */
-    private static final class IdfWeigher implements TermWeigher {
-        private final IndexReader reader;
-        private final String field;
-        private final long docCount;
-        private BytesRef lastTerm;
-        private float lastIdf;
-
-        IdfWeigher(IndexReader reader, String field) throws IOException {
-            this.reader = reader;
-            this.field = field;
-            this.docCount = Math.max(reader.getDocCount(field), 1);
-        }
-
-        @Override
-        public float weight(BytesRef term, int freq) throws IOException {
-            if (lastTerm == null || term.bytesEquals(lastTerm) == false) {
-                final long docFreq = reader.docFreq(new Term(field, term));
-                lastIdf = (float) Math.log(1 + (docCount - docFreq + 0.5) / (docFreq + 0.5));
-                lastTerm = BytesRef.deepCopyOf(term);
-            }
-            return lastIdf * freq / (freq + TERM_RANK_K1);
-        }
-    }
-
-    /**
      * Finds the top {@code limit} terms of each of the leaf's sorted documents in one pass over the field's terms, ranked by
      * {@code weigher}. Each queue is a min-heap on the weight.
      */
@@ -426,29 +337,6 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
             }
         }
         return topTerms;
-    }
-
-    /** Returns the score the document gets for a disjunction of the given terms, using the field's similarity, or 0 if none match. */
-    private static float scoreOwnTerms(
-        Engine.Searcher searcher,
-        LeafReaderContext leaf,
-        String field,
-        int doc,
-        PriorityQueue<WeightedTerm> terms
-    ) throws IOException {
-        if (terms.isEmpty()) {
-            return 0f;
-        }
-        final BooleanQuery.Builder builder = new BooleanQuery.Builder();
-        for (WeightedTerm term : terms) {
-            builder.add(new TermQuery(new Term(field, term.term())), BooleanClause.Occur.SHOULD);
-        }
-        final Weight weight = searcher.createWeight(searcher.rewrite(builder.build()), ScoreMode.COMPLETE, 1f);
-        final Scorer scorer = weight.scorer(leaf);
-        if (scorer == null || scorer.iterator().advance(doc) != doc) {
-            return 0f;
-        }
-        return scorer.score();
     }
 
     /**

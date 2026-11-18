@@ -484,7 +484,8 @@ public class IndexShard extends AbstractIndexShardComponent implements IndicesCl
                 this::getEngine,
                 mapperService,
                 threadPool.generic(),
-                IndexSettings.BAYESIAN_BM25_PSEUDO_QUERY_TERMS.get(indexSettings.getSettings())
+                IndexSettings.BAYESIAN_BM25_N_SAMPLES.get(indexSettings.getSettings()),
+                IndexSettings.BAYESIAN_BM25_TOKENS_PER_QUERY.get(indexSettings.getSettings())
             )
             : null;
         this.relativeTimeInNanosSupplier = relativeTimeInNanosSupplier;
