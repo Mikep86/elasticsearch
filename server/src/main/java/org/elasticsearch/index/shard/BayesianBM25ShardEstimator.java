@@ -16,12 +16,14 @@ import org.apache.lucene.index.FloatVectorValues;
 import org.apache.lucene.index.IndexOptions;
 import org.apache.lucene.index.IndexReader;
 import org.apache.lucene.index.IndexWriter;
+import org.apache.lucene.index.KnnVectorValues;
 import org.apache.lucene.index.LeafReaderContext;
 import org.apache.lucene.index.PostingsEnum;
 import org.apache.lucene.index.ReaderUtil;
 import org.apache.lucene.index.SegmentReader;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
+import org.apache.lucene.index.VectorSimilarityFunction;
 import org.apache.lucene.search.BayesianScoreEstimator;
 import org.apache.lucene.search.BooleanClause;
 import org.apache.lucene.search.BooleanQuery;
@@ -76,7 +78,8 @@ import java.util.function.Supplier;
  * Estimates Bayesian BM25 parameters for the full-text fields of a shard whenever a refresh makes a newly merged segment visible.
  * Text fields are calibrated with Lucene's {@link BayesianScoreEstimator}, which scores pseudo-queries made of sampled vocabulary terms.
  * It also estimates sigmoid calibration parameters for the dense and sparse vector fields of semantic fields, so that their scores can be
- * fused with the calibrated BM25 scores; sparse fields are calibrated like dense ones, with sampled chunks' token vectors as pseudo-queries.
+ * fused with the calibrated BM25 scores; dense fields use a two-pool logistic fit over sampled vectors' neighbors and random documents,
+ * and sparse fields use the median and spread of sampled chunks' neighbor scores.
  * The estimate runs asynchronously, at most one at a time, against the shard-wide searcher so that it sees the same term statistics as
  * queries do.
  */
@@ -91,6 +94,14 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
     /** Candidates per pseudo-query, following the kNN query default of 1.5 * k. */
     private static final int VECTOR_NUM_CANDIDATES = Math.round(1.5f * (VECTOR_NEIGHBORS + 1));
     private static final long VECTOR_SAMPLE_SEED = 42;
+    /** Neighbor ranks {@code [0, VECTOR_POSITIVES)} are the positives of the two-pool dense vector calibration. */
+    private static final int VECTOR_POSITIVES = 50;
+    /** Neighbor ranks {@code [VECTOR_HARD_NEGATIVES_FROM, VECTOR_NEIGHBORS)} are the hard negatives, which set the sigmoid slope. */
+    private static final int VECTOR_HARD_NEGATIVES_FROM = 500;
+    /** Number of random documents scored against every pseudo-query as negatives, which set the sigmoid midpoint. */
+    private static final int VECTOR_RANDOM_SAMPLES = 1000;
+    /** Differs from {@link #VECTOR_SAMPLE_SEED} so that the random documents are not the pseudo-queries themselves. */
+    private static final long VECTOR_RANDOM_SEED = 43;
 
     /** Number of chunks whose token vectors are sampled as pseudo-queries when calibrating a sparse vector field. */
     private static final int SPARSE_SAMPLES = 200;
@@ -375,8 +386,8 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
 
     /**
      * Calibrates a semantic field's vector scores by using indexed vectors as pseudo-queries: each sampled vector retrieves its nearest
-     * {@link #VECTOR_NEIGHBORS} documents, excluding its own, with the same nested kNN query that searches use. The pooled scores give
-     * {@code beta = median} and {@code alpha = 1 / std}, as {@link BayesianScoreEstimator} does for BM25. No base rate is estimated.
+     * {@link #VECTOR_NEIGHBORS} documents, excluding its own, with the same nested kNN query that searches use, and is also scored
+     * against random documents. See {@link #twoPoolParameters} for how the scores become sigmoid parameters. No base rate is estimated.
      *
      * @return the parameters, or {@code null} if the field has no vectors on this shard
      */
@@ -420,7 +431,11 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
         }
 
         final float[] scores = new float[sampleCount * VECTOR_NEIGHBORS];
+        final float[] positives = new float[sampleCount * VECTOR_POSITIVES];
+        final float[] hardNegatives = new float[sampleCount * (VECTOR_NEIGHBORS - VECTOR_HARD_NEGATIVES_FROM)];
         int scoreCount = 0;
+        int positiveCount = 0;
+        int hardNegativeCount = 0;
         for (int i = 0; i < vectors.size(); i++) {
             final Query query = fieldType.createKnnQuery(
                 VectorData.fromFloats(vectors.get(i)),
@@ -447,11 +462,213 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
                 if (parentOf(hit.doc, leaves, parentFilter) == sourceParents[i]) {
                     continue;
                 }
+                // hits are in descending score order, so the neighbor rank is the number of hits kept so far
+                if (kept < VECTOR_POSITIVES) {
+                    positives[positiveCount++] = hit.score;
+                } else if (kept >= VECTOR_HARD_NEGATIVES_FROM) {
+                    hardNegatives[hardNegativeCount++] = hit.score;
+                }
                 scores[scoreCount++] = hit.score;
                 kept++;
             }
         }
+        final float[] randomNegatives = scoreRandomDocuments(leaves, leafStarts, field, parentFilter, vectors, sourceParents);
+        return twoPoolParameters(
+            positives,
+            positiveCount,
+            hardNegatives,
+            hardNegativeCount,
+            randomNegatives,
+            randomNegatives.length,
+            scores,
+            scoreCount
+        );
+    }
+
+    /**
+     * Scores every pseudo-query against {@link #VECTOR_RANDOM_SAMPLES} random documents, skipping its own. A document's score is the max
+     * over its chunks, as the nested kNN query scores it. Vectors are compared at full precision, so on a quantized field these scores
+     * differ slightly from the kNN scores of the neighbors.
+     */
+    private static float[] scoreRandomDocuments(
+        List<LeafReaderContext> leaves,
+        long[] leafStarts,
+        String field,
+        BitSetProducer parentFilter,
+        List<float[]> queries,
+        int[] queryParents
+    ) throws IOException {
+        // Sample vector ordinals like the pseudo-queries, then load all chunk vectors of each distinct parent document
+        final long total = leafStarts[leaves.size()];
+        final int sampleCount = (int) Math.min(VECTOR_RANDOM_SAMPLES, total);
+        final long[] sampled = new Random(VECTOR_RANDOM_SEED).longs(0, total).distinct().limit(sampleCount).sorted().toArray();
+        final List<float[][]> randomChunks = new ArrayList<>(sampleCount);
+        final List<Integer> randomParents = new ArrayList<>(sampleCount);
+        VectorSimilarityFunction similarity = null;
+        int next = 0;
+        for (int i = 0; i < leaves.size() && next < sampleCount; i++) {
+            if (sampled[next] >= leafStarts[i + 1]) {
+                continue;
+            }
+            final LeafReaderContext leaf = leaves.get(i);
+            final FloatVectorValues values = leaf.reader().getFloatVectorValues(field);
+            similarity = leaf.reader().getFieldInfos().fieldInfo(field).getVectorSimilarityFunction();
+            final BitSet parents = parentFilter.getBitSet(leaf);
+            int lastParent = -1;
+            while (next < sampleCount && sampled[next] < leafStarts[i + 1]) {
+                final int childDoc = values.ordToDoc((int) (sampled[next] - leafStarts[i]));
+                next++;
+                final int parent = parents == null ? childDoc : parents.nextSetBit(childDoc);
+                if (parent == lastParent) {
+                    continue; // ordinals are sorted and in doc order, so a parent's sampled chunks are adjacent
+                }
+                lastParent = parent;
+                final List<float[]> chunks = new ArrayList<>();
+                final int firstChild = parents == null ? childDoc : parents.prevSetBit(parent - 1) + 1;
+                final int endChild = parents == null ? childDoc + 1 : parent;
+                final KnnVectorValues.DocIndexIterator it = values.iterator();
+                for (int doc = it.advance(firstChild); doc < endChild; doc = it.nextDoc()) {
+                    chunks.add(values.vectorValue(it.index()).clone());
+                }
+                randomChunks.add(chunks.toArray(new float[0][]));
+                randomParents.add(leaf.docBase + parent);
+            }
+        }
+        if (similarity == null || randomChunks.isEmpty()) {
+            return new float[0];
+        }
+
+        final float[] scores = new float[queries.size() * randomChunks.size()];
+        int count = 0;
+        for (int q = 0; q < queries.size(); q++) {
+            final float[] query = queries.get(q);
+            for (int r = 0; r < randomChunks.size(); r++) {
+                if (randomParents.get(r) == queryParents[q]) {
+                    continue;
+                }
+                float max = Float.NEGATIVE_INFINITY;
+                for (float[] chunk : randomChunks.get(r)) {
+                    max = Math.max(max, similarity.compare(query, chunk));
+                }
+                scores[count++] = max;
+            }
+        }
+        return Arrays.copyOf(scores, count);
+    }
+
+    /**
+     * Turns dense vector neighbor scores into sigmoid parameters with two class-balanced logistic fits of the positives (the nearest
+     * neighbors): against hard negatives (farther neighbors) for {@code alpha}, and against random documents for {@code beta}. Falls back
+     * to {@link #poolParameters} over all neighbor scores when a pool is empty or a fit is degenerate.
+     *
+     * @return the parameters, or {@code null} if there are no scores
+     */
+    private static BayesianScoreEstimator.Parameters twoPoolParameters(
+        float[] positives,
+        int positiveCount,
+        float[] hardNegatives,
+        int hardNegativeCount,
+        float[] randomNegatives,
+        int randomNegativeCount,
+        float[] scores,
+        int scoreCount
+    ) {
+        if (positiveCount > 0 && hardNegativeCount > 0 && randomNegativeCount > 0) {
+            final double[] slopeFit = fitLogistic(positives, positiveCount, hardNegatives, hardNegativeCount);
+            final double[] midpointFit = fitLogistic(positives, positiveCount, randomNegatives, randomNegativeCount);
+            if (slopeFit != null && midpointFit != null) {
+                return new BayesianScoreEstimator.Parameters((float) slopeFit[0], (float) midpointFit[1], 0f);
+            }
+        }
         return poolParameters(scores, scoreCount);
+    }
+
+    /**
+     * Fits {@code P(positive | score) = sigmoid(alpha * (score - beta))} by class-balanced logistic regression, so that both pools weigh
+     * the same regardless of their sizes. Uses Newton's method on standardized scores with a tiny ridge on the slope, which keeps the
+     * fit finite when the pools barely overlap.
+     *
+     * @return {@code {alpha, beta}}, or {@code null} if the pools cannot be separated
+     */
+    private static double[] fitLogistic(float[] positives, int positiveCount, float[] negatives, int negativeCount) {
+        final double positiveWeight = 0.5 / positiveCount;
+        final double negativeWeight = 0.5 / negativeCount;
+        double mean = 0;
+        for (int i = 0; i < positiveCount; i++) {
+            mean += positives[i];
+        }
+        for (int i = 0; i < negativeCount; i++) {
+            mean += negatives[i];
+        }
+        mean /= positiveCount + negativeCount;
+        double variance = 0;
+        for (int i = 0; i < positiveCount; i++) {
+            variance += (positives[i] - mean) * (positives[i] - mean);
+        }
+        for (int i = 0; i < negativeCount; i++) {
+            variance += (negatives[i] - mean) * (negatives[i] - mean);
+        }
+        final double std = Math.sqrt(variance / (positiveCount + negativeCount));
+        if (std == 0) {
+            return null;
+        }
+
+        final double ridge = 1e-6;
+        double a = 0;
+        double b = 0;
+        for (int iteration = 0; iteration < 100; iteration++) {
+            // gradient and Hessian of the weighted negative log-likelihood in (a, b), accumulated over both pools
+            final double[] sums = new double[5]; // grad a, grad b, hess aa, hess ab, hess bb
+            accumulate(sums, positives, positiveCount, positiveWeight, 1, mean, std, a, b);
+            accumulate(sums, negatives, negativeCount, negativeWeight, 0, mean, std, a, b);
+            final double gradA = sums[0] + ridge * a;
+            final double gradB = sums[1];
+            final double hessAA = sums[2] + ridge;
+            final double hessAB = sums[3];
+            final double hessBB = sums[4];
+            final double det = hessAA * hessBB - hessAB * hessAB;
+            if (det <= 0 || Double.isFinite(det) == false) {
+                return null;
+            }
+            final double stepA = (hessBB * gradA - hessAB * gradB) / det;
+            final double stepB = (hessAA * gradB - hessAB * gradA) / det;
+            a -= stepA;
+            b -= stepB;
+            if (Math.max(Math.abs(stepA), Math.abs(stepB)) < 1e-10) {
+                break;
+            }
+        }
+        final double alpha = a / std;
+        final double beta = mean - b * std / a;
+        if (Double.isFinite(alpha) == false || alpha <= 0 || Double.isFinite(beta) == false) {
+            return null;
+        }
+        return new double[] { alpha, beta };
+    }
+
+    /** Adds one pool's terms of the logistic gradient and Hessian to {@code sums}; see {@link #fitLogistic}. */
+    private static void accumulate(
+        double[] sums,
+        float[] scores,
+        int count,
+        double weight,
+        int label,
+        double mean,
+        double std,
+        double a,
+        double b
+    ) {
+        for (int i = 0; i < count; i++) {
+            final double z = (scores[i] - mean) / std;
+            final double p = 1.0 / (1.0 + Math.exp(-(a * z + b)));
+            final double residual = weight * (p - label);
+            final double curvature = weight * p * (1 - p);
+            sums[0] += residual * z;
+            sums[1] += residual;
+            sums[2] += curvature * z * z;
+            sums[3] += curvature * z;
+            sums[4] += curvature;
+        }
     }
 
     /**
