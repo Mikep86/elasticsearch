@@ -803,6 +803,9 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
             final FloatVectorValues values = leaf.reader().getFloatVectorValues(field);
             similarity = leaf.reader().getFieldInfos().fieldInfo(field).getVectorSimilarityFunction();
             final BitSet parents = parentFilter.getBitSet(leaf);
+            // A copy, so that its iterator's position is ours alone: on sparse fields, iterators of one instance share it
+            final FloatVectorValues own = values.copy();
+            final KnnVectorValues.DocIndexIterator chunkIterator = own.iterator();
             int lastParent = -1;
             while (next < sampleCount && sampled[next] < leafStarts[i + 1]) {
                 final int childDoc = values.ordToDoc((int) (sampled[next] - leafStarts[i]));
@@ -812,14 +815,7 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
                     continue; // ordinals are sorted and in doc order, so a parent's sampled chunks are adjacent
                 }
                 lastParent = parent;
-                final List<float[]> chunks = new ArrayList<>();
-                final int firstChild = parents == null ? childDoc : parents.prevSetBit(parent - 1) + 1;
-                final int endChild = parents == null ? childDoc + 1 : parent;
-                final KnnVectorValues.DocIndexIterator it = values.iterator();
-                for (int doc = it.advance(firstChild); doc < endChild; doc = it.nextDoc()) {
-                    chunks.add(values.vectorValue(it.index()).clone());
-                }
-                randomChunks.add(chunks.toArray(new float[0][]));
+                randomChunks.add(parentChunks(own, chunkIterator, parents, parent));
                 randomParents.add(leaf.docBase + parent);
             }
         }
@@ -846,6 +842,22 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
     }
 
     /**
+     * Returns copies of the vectors of a parent document's chunks, given its leaf-level doc id, or of the document itself if not nested.
+     * Callers pass parents in increasing doc order, with an iterator of {@code values} that nothing else moves.
+     */
+    private static float[][] parentChunks(FloatVectorValues values, KnnVectorValues.DocIndexIterator it, BitSet parents, int parent)
+        throws IOException {
+        final int firstChild = parents == null || parent == 0 ? parent : parents.prevSetBit(parent - 1) + 1;
+        final int endChild = parents == null ? parent + 1 : parent;
+        // advance only when behind: the previous parent's loop may already stand on this parent's first chunk
+        final List<float[]> chunks = new ArrayList<>();
+        for (int doc = it.docID() < firstChild ? it.advance(firstChild) : it.docID(); doc < endChild; doc = it.nextDoc()) {
+            chunks.add(values.vectorValue(it.index()).clone());
+        }
+        return chunks.toArray(new float[0][]);
+    }
+
+    /**
      * Turns dense vector neighbor scores into sigmoid parameters with two class-balanced logistic fits of the positives (the nearest
      * neighbors): against hard negatives (farther neighbors) for {@code alpha}, and against random documents for {@code beta}. Falls back
      * to {@link #poolParameters} over all neighbor scores when a pool is empty or a fit is degenerate.
@@ -868,6 +880,18 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
             if (slopeFit != null && midpointFit != null) {
                 return new BayesianScoreEstimator.Parameters((float) slopeFit[0], (float) midpointFit[1], 0f);
             }
+            logger.debug(
+                "two-pool vector fit failed (slope fit {}, midpoint fit {}), using median and spread",
+                slopeFit != null,
+                midpointFit != null
+            );
+        } else {
+            logger.debug(
+                "two-pool vector pools are empty (positives {}, hard negatives {}, random negatives {}), using median and spread",
+                positiveCount,
+                hardNegativeCount,
+                randomNegativeCount
+            );
         }
         return poolParameters(scores, scoreCount);
     }
