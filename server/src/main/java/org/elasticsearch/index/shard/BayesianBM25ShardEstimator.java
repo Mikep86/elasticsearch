@@ -860,7 +860,9 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
     /**
      * Turns dense vector neighbor scores into sigmoid parameters with two class-balanced logistic fits of the positives (the nearest
      * neighbors): against hard negatives (farther neighbors) for {@code alpha}, and against random documents for {@code beta}. Falls back
-     * to {@link #poolParameters} over all neighbor scores when a pool is empty or a fit is degenerate.
+     * to {@link #poolParameters} over all neighbor scores when a pool is empty, a fit is degenerate, or the hard negatives are separated
+     * more easily than the random documents: then they are not hard, as on a shard with few documents, where the farther neighbor ranks
+     * span most of the shard.
      *
      * @return the parameters, or {@code null} if there are no scores
      */
@@ -878,13 +880,22 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
             final double[] slopeFit = fitLogistic(positives, positiveCount, hardNegatives, hardNegativeCount);
             final double[] midpointFit = fitLogistic(positives, positiveCount, randomNegatives, randomNegativeCount);
             if (slopeFit != null && midpointFit != null) {
-                return new BayesianScoreEstimator.Parameters((float) slopeFit[0], (float) midpointFit[1], 0f);
+                if (slopeFit[0] <= midpointFit[0]) {
+                    return new BayesianScoreEstimator.Parameters((float) slopeFit[0], (float) midpointFit[1], 0f);
+                }
+                logger.debug(
+                    "two-pool vector hard negatives are not hard (slope [{}] against them, [{}] against random documents), "
+                        + "using median and spread",
+                    slopeFit[0],
+                    midpointFit[0]
+                );
+            } else {
+                logger.debug(
+                    "two-pool vector fit failed (slope fit {}, midpoint fit {}), using median and spread",
+                    slopeFit != null,
+                    midpointFit != null
+                );
             }
-            logger.debug(
-                "two-pool vector fit failed (slope fit {}, midpoint fit {}), using median and spread",
-                slopeFit != null,
-                midpointFit != null
-            );
         } else {
             logger.debug(
                 "two-pool vector pools are empty (positives {}, hard negatives {}, random negatives {}), using median and spread",
