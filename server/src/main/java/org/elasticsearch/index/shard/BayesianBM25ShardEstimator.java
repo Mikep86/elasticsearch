@@ -22,6 +22,7 @@ import org.apache.lucene.index.MultiTerms;
 import org.apache.lucene.index.PostingsEnum;
 import org.apache.lucene.index.ReaderUtil;
 import org.apache.lucene.index.SegmentReader;
+import org.apache.lucene.index.Term;
 import org.apache.lucene.index.Terms;
 import org.apache.lucene.index.TermsEnum;
 import org.apache.lucene.index.VectorSimilarityFunction;
@@ -36,6 +37,7 @@ import org.apache.lucene.search.ReferenceManager;
 import org.apache.lucene.search.ScoreDoc;
 import org.apache.lucene.search.ScoreMode;
 import org.apache.lucene.search.Scorer;
+import org.apache.lucene.search.TermQuery;
 import org.apache.lucene.search.TermStatistics;
 import org.apache.lucene.search.TopDocs;
 import org.apache.lucene.search.Weight;
@@ -45,6 +47,7 @@ import org.apache.lucene.search.similarities.PerFieldSimilarityWrapper;
 import org.apache.lucene.search.similarities.Similarity;
 import org.apache.lucene.search.similarities.Similarity.SimScorer;
 import org.apache.lucene.store.AlreadyClosedException;
+import org.apache.lucene.util.ArrayUtil;
 import org.apache.lucene.util.BitSet;
 import org.apache.lucene.util.Bits;
 import org.apache.lucene.util.BytesRef;
@@ -70,6 +73,7 @@ import org.elasticsearch.search.vectors.VectorData;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -81,10 +85,12 @@ import java.util.Set;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
+import java.util.stream.IntStream;
 
 /**
  * Estimates Bayesian BM25 parameters for the full-text fields of a shard whenever a refresh makes a newly merged segment visible.
- * Text fields are calibrated in units of their mean token idf, falling back to Lucene's {@link BayesianScoreEstimator}.
+ * Text fields are calibrated in units of their mean token idf, with the midpoint fitted against the dense vector fields' nearest neighbors
+ * of sampled documents when there are any, falling back to Lucene's {@link BayesianScoreEstimator}.
  * It also estimates sigmoid calibration parameters for the dense and sparse vector fields of semantic fields, so that their scores can be
  * fused with the calibrated BM25 scores; dense fields use a two-pool logistic fit over sampled vectors' neighbors and random documents,
  * and sparse fields use the median and spread of sampled chunks' neighbor scores.
@@ -119,10 +125,18 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
     /**
      * Text calibration constants in units of the field's mean token idf {@code mu}: {@code alpha = TEXT_SLOPE / mu} and
      * {@code beta = TEXT_MIDPOINT * mu}. They map a score of zero to 0.05 and the score of a query of 10 typical tokens matching fully to
-     * 0.95, i.e. {@code 2 ln 19 / 10} and {@code 10 / 2}.
+     * 0.95, i.e. {@code 2 ln 19 / 10} and {@code 10 / 2}. {@code TEXT_MIDPOINT} is the fallback when the midpoint cannot be fitted
+     * against a dense vector field's neighbors, see {@link #textMidpoint}.
      */
     private static final double TEXT_SLOPE = 2 * Math.log(19) / 10;
     private static final double TEXT_MIDPOINT = 5;
+    /** Number of a source document's most significant terms that form its lexical pseudo-query when fitting the text midpoint. */
+    private static final int TEXT_QUERY_TERMS = 10;
+    /** Number of random matching documents per pseudo-query that are the negatives of the text midpoint fit. */
+    private static final int TEXT_RANDOM_NEGATIVES = 500;
+    private static final long TEXT_RANDOM_SEED = 43;
+    /** Saturation used to rank a document's terms; the document's length is the same for all of its terms, so it is left out. */
+    private static final float TERM_RANK_K1 = 1.2f;
 
     private final ShardId shardId;
     private final Supplier<Engine> engineSupplier;
@@ -206,22 +220,12 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
         try (Engine.Searcher searcher = engineSupplier.get().acquireSearcher("bayesian_bm25_estimate")) {
             final Set<String> segmentNames = mergedSegmentNames(searcher);
             final Map<String, BayesianScoreEstimator.Parameters> byField = new HashMap<>();
-            for (String field : fullTextFields(FieldInfos.getMergedFieldInfos(searcher.getIndexReader()))) {
-                try {
-                    BayesianScoreEstimator.Parameters textParameters = estimateText(searcher, field);
-                    if (textParameters == null) {
-                        logger.debug("[{}] falling back to Lucene's Bayesian BM25 estimator for field [{}]", shardId, field);
-                        textParameters = BayesianScoreEstimator.estimate(searcher, field, nSamples, tokensPerQuery, TEXT_SAMPLE_SEED);
-                    }
-                    byField.put(field, textParameters);
-                } catch (IOException | RuntimeException e) {
-                    logger.warn("[{}] failed to estimate Bayesian BM25 parameters for field [{}]", shardId, field, e);
-                }
-            }
+            // Vector fields first: their sampled documents' nearest neighbors anchor the text fields' midpoints
+            final Map<Integer, Set<Integer>> vectorNeighbors = new HashMap<>();
             for (MappedFieldType fieldType : semanticEmbeddingFields()) {
                 try {
                     BayesianScoreEstimator.Parameters vectorParameters = switch (fieldType) {
-                        case DenseVectorFieldType dense -> estimateVector(searcher, dense);
+                        case DenseVectorFieldType dense -> estimateVector(searcher, dense, vectorNeighbors);
                         case SparseVectorFieldType sparse -> estimateSparse(searcher, sparse);
                         default -> throw new AssertionError("unexpected embedding field type [" + fieldType.typeName() + "]");
                     };
@@ -230,6 +234,18 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
                     }
                 } catch (IOException | RuntimeException e) {
                     logger.warn("[{}] failed to estimate vector calibration parameters for field [{}]", shardId, fieldType.name(), e);
+                }
+            }
+            for (String field : fullTextFields(FieldInfos.getMergedFieldInfos(searcher.getIndexReader()))) {
+                try {
+                    BayesianScoreEstimator.Parameters textParameters = estimateText(searcher, field, vectorNeighbors);
+                    if (textParameters == null) {
+                        logger.debug("[{}] falling back to Lucene's Bayesian BM25 estimator for field [{}]", shardId, field);
+                        textParameters = BayesianScoreEstimator.estimate(searcher, field, nSamples, tokensPerQuery, TEXT_SAMPLE_SEED);
+                    }
+                    byField.put(field, textParameters);
+                } catch (IOException | RuntimeException e) {
+                    logger.warn("[{}] failed to estimate Bayesian BM25 parameters for field [{}]", shardId, field, e);
                 }
             }
             parameters = new BayesianBM25ShardParameters(segmentNames, byField);
@@ -411,10 +427,13 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
      * scores {@code k1 + 1} times higher than Lucene's {@link BM25Similarity}. A token's largest contribution is its BM25 idf times that
      * similarity's constant factor, so {@code mu} is the token-weighted mean idf times the factor.
      * No base rate: log-odds fusion adds each clause's log-odds, so a prior in every clause would be counted once per clause.
+     * The midpoint is fitted against the dense vector fields' neighbors when there are any, see {@link #textMidpoint}.
      *
+     * @param vectorNeighbors the nearest neighbors of the dense vector fields' sampled documents, by shard doc id
      * @return the parameters, or {@code null} if the field has no terms on this shard or is not scored with BM25
      */
-    private static BayesianScoreEstimator.Parameters estimateText(IndexSearcher searcher, String field) throws IOException {
+    private BayesianScoreEstimator.Parameters estimateText(IndexSearcher searcher, String field, Map<Integer, Set<Integer>> vectorNeighbors)
+        throws IOException {
         Similarity similarity = searcher.getSimilarity();
         if (similarity instanceof PerFieldSimilarityWrapper perField) {
             // the per-field similarity comes wrapped in a guard against zero norms
@@ -460,7 +479,186 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
             return null;
         }
         final double mu = scale * weightedIdf / totalTermFreq;
-        return new BayesianScoreEstimator.Parameters((float) (TEXT_SLOPE / mu), (float) (TEXT_MIDPOINT * mu), 0f);
+        final double alpha = TEXT_SLOPE / mu;
+        Double beta = vectorNeighbors.isEmpty() ? null : textMidpoint(searcher, field, vectorNeighbors, alpha);
+        if (beta == null) {
+            if (vectorNeighbors.isEmpty() == false) {
+                logger.debug("[{}] could not fit the midpoint of field [{}] against vector neighbors, using the default", shardId, field);
+            }
+            beta = TEXT_MIDPOINT * mu;
+        }
+        return new BayesianScoreEstimator.Parameters((float) alpha, beta.floatValue(), 0f);
+    }
+
+    /**
+     * Fits a text field's midpoint with its slope held at {@code alpha}: the score at which a document is as likely to be one of a
+     * dense vector field's nearest neighbors of a sampled document as a random document, among the documents that match a pseudo-query
+     * made of the sampled document's most significant terms. Calibrating the text field against another signal's neighbors puts it on
+     * the same footing as the vector fields in the fusion.
+     *
+     * @return the midpoint, or {@code null} if there are no positives or negatives, or the fit is degenerate
+     */
+    private Double textMidpoint(IndexSearcher searcher, String field, Map<Integer, Set<Integer>> vectorNeighbors, double alpha)
+        throws IOException {
+        final IndexReader reader = searcher.getIndexReader();
+        final List<LeafReaderContext> leaves = reader.leaves();
+
+        // Up to nSamples sources, drawn deterministically, grouped by leaf in doc id order as collectTerms expects
+        final List<Integer> sources = new ArrayList<>(vectorNeighbors.keySet());
+        sources.sort(null);
+        Collections.shuffle(sources, new Random(TEXT_SAMPLE_SEED));
+        final List<List<Integer>> byLeaf = new ArrayList<>(leaves.size());
+        for (int i = 0; i < leaves.size(); i++) {
+            byLeaf.add(new ArrayList<>());
+        }
+        for (int source : sources.subList(0, Math.min(nSamples, sources.size()))) {
+            byLeaf.get(ReaderUtil.subIndex(source, leaves)).add(source);
+        }
+
+        final TermWeigher weigher = new IdfWeigher(reader, field);
+        final Random random = new Random(TEXT_RANDOM_SEED);
+        float[] positives = new float[16];
+        float[] negatives = new float[16];
+        int positiveCount = 0;
+        int negativeCount = 0;
+        for (int i = 0; i < leaves.size(); i++) {
+            final List<Integer> leafSources = byLeaf.get(i);
+            if (leafSources.isEmpty()) {
+                continue;
+            }
+            leafSources.sort(null);
+            final LeafReaderContext leaf = leaves.get(i);
+            final int[] docs = leafSources.stream().mapToInt(source -> source - leaf.docBase).toArray();
+            final List<PriorityQueue<WeightedTerm>> topTerms = collectTerms(leaf, field, docs, TEXT_QUERY_TERMS, weigher);
+            for (int d = 0; d < docs.length; d++) {
+                final int source = leaf.docBase + docs[d];
+                final Map<Integer, Float> matches = scoreMatches(searcher, field, topTerms.get(d), source);
+                if (matches.isEmpty()) {
+                    continue;
+                }
+                for (int neighbor : vectorNeighbors.get(source)) {
+                    final Float score = matches.get(neighbor);
+                    if (score != null) {
+                        positives = ArrayUtil.grow(positives, positiveCount + 1);
+                        positives[positiveCount++] = score;
+                    }
+                }
+                final float[] matchScores = new float[matches.size()];
+                int m = 0;
+                for (float score : matches.values()) {
+                    matchScores[m++] = score;
+                }
+                final int[] picked = matchScores.length <= TEXT_RANDOM_NEGATIVES
+                    ? IntStream.range(0, matchScores.length).toArray()
+                    : random.ints(0, matchScores.length).distinct().limit(TEXT_RANDOM_NEGATIVES).toArray();
+                negatives = ArrayUtil.grow(negatives, negativeCount + picked.length);
+                for (int p : picked) {
+                    negatives[negativeCount++] = matchScores[p];
+                }
+            }
+        }
+        if (positiveCount == 0 || negativeCount == 0) {
+            return null;
+        }
+        final double beta = fitMidpoint(positives, positiveCount, negatives, negativeCount, alpha);
+        return Double.isFinite(beta) ? beta : null;
+    }
+
+    /**
+     * Class-balanced logistic fit of the midpoint of {@code sigmoid(alpha * (score - beta))} with the slope held at {@code alpha}, so
+     * that both pools weigh the same regardless of their sizes. Newton's method on {@code beta}, starting at the mean of both pools.
+     */
+    private static double fitMidpoint(float[] positives, int positiveCount, float[] negatives, int negativeCount, double alpha) {
+        final double positiveWeight = 0.5 / positiveCount;
+        final double negativeWeight = 0.5 / negativeCount;
+        double beta = 0;
+        for (int i = 0; i < positiveCount; i++) {
+            beta += positives[i];
+        }
+        for (int i = 0; i < negativeCount; i++) {
+            beta += negatives[i];
+        }
+        beta /= positiveCount + negativeCount;
+        for (int iteration = 0; iteration < 100; iteration++) {
+            // gradient and curvature of the weighted negative log-likelihood in beta, over both pools
+            double gradient = 0;
+            double curvature = 0;
+            for (int i = 0; i < positiveCount; i++) {
+                final double p = 1 / (1 + Math.exp(-alpha * (positives[i] - beta)));
+                gradient += positiveWeight * (p - 1) * -alpha;
+                curvature += positiveWeight * p * (1 - p) * alpha * alpha;
+            }
+            for (int i = 0; i < negativeCount; i++) {
+                final double p = 1 / (1 + Math.exp(-alpha * (negatives[i] - beta)));
+                gradient += negativeWeight * p * -alpha;
+                curvature += negativeWeight * p * (1 - p) * alpha * alpha;
+            }
+            if (curvature <= 0) {
+                return Double.NaN;
+            }
+            final double step = gradient / curvature;
+            beta -= step;
+            if (Math.abs(step) < 1e-10) {
+                break;
+            }
+        }
+        return beta;
+    }
+
+    /** Returns the scores of all live documents matching a disjunction of the given terms on the field, except {@code sourceDoc}. */
+    private static Map<Integer, Float> scoreMatches(IndexSearcher searcher, String field, PriorityQueue<WeightedTerm> terms, int sourceDoc)
+        throws IOException {
+        final Map<Integer, Float> scores = new HashMap<>();
+        if (terms.isEmpty()) {
+            return scores;
+        }
+        final BooleanQuery.Builder builder = new BooleanQuery.Builder();
+        for (WeightedTerm term : terms) {
+            builder.add(new TermQuery(new Term(field, term.term())), BooleanClause.Occur.SHOULD);
+        }
+        final Weight weight = searcher.createWeight(searcher.rewrite(builder.build()), ScoreMode.COMPLETE, 1f);
+        for (LeafReaderContext leaf : searcher.getIndexReader().leaves()) {
+            final Scorer scorer = weight.scorer(leaf);
+            if (scorer == null) {
+                continue;
+            }
+            final Bits liveDocs = leaf.reader().getLiveDocs();
+            final DocIdSetIterator it = scorer.iterator();
+            for (int doc = it.nextDoc(); doc != DocIdSetIterator.NO_MORE_DOCS; doc = it.nextDoc()) {
+                if ((liveDocs != null && liveDocs.get(doc) == false) || leaf.docBase + doc == sourceDoc) {
+                    continue;
+                }
+                scores.put(leaf.docBase + doc, scorer.score());
+            }
+        }
+        return scores;
+    }
+
+    /**
+     * Weighs text terms by {@code idf * tf / (tf + k1)}. The shard-wide idf is computed once per term: terms arrive in order, each one
+     * for every sampled document that contains it.
+     */
+    private static final class IdfWeigher implements TermWeigher {
+        private final IndexReader reader;
+        private final String field;
+        private final long docCount;
+        private BytesRef lastTerm;
+        private float lastIdf;
+
+        IdfWeigher(IndexReader reader, String field) throws IOException {
+            this.reader = reader;
+            this.field = field;
+            this.docCount = Math.max(reader.getDocCount(field), 1);
+        }
+
+        @Override
+        public float weight(BytesRef term, int freq) throws IOException {
+            if (lastTerm == null || term.bytesEquals(lastTerm) == false) {
+                lastIdf = (float) bm25Idf(reader.docFreq(new Term(field, term)), docCount);
+                lastTerm = BytesRef.deepCopyOf(term);
+            }
+            return lastIdf * freq / (freq + TERM_RANK_K1);
+        }
     }
 
     /** BM25's idf, as {@link BM25Similarity} computes it. */
@@ -473,9 +671,14 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
      * {@link #VECTOR_NEIGHBORS} documents, excluding its own, with the same nested kNN query that searches use, and is also scored
      * against random documents. See {@link #twoPoolParameters} for how the scores become sigmoid parameters. No base rate is estimated.
      *
+     * @param neighbors collects, for each sampled document, its {@link #VECTOR_POSITIVES} nearest neighbors, by shard doc id
      * @return the parameters, or {@code null} if the field has no vectors on this shard
      */
-    private BayesianScoreEstimator.Parameters estimateVector(Engine.Searcher searcher, DenseVectorFieldType fieldType) throws IOException {
+    private BayesianScoreEstimator.Parameters estimateVector(
+        Engine.Searcher searcher,
+        DenseVectorFieldType fieldType,
+        Map<Integer, Set<Integer>> neighbors
+    ) throws IOException {
         final String field = fieldType.name();
         final IndexSettings indexSettings = mapperService.getIndexSettings();
         final BitSetProducer parentFilter = mapperService.parserContext()
@@ -543,12 +746,14 @@ class BayesianBM25ShardEstimator implements ReferenceManager.RefreshListener {
                 if (kept == VECTOR_NEIGHBORS) {
                     break;
                 }
-                if (parentOf(hit.doc, leaves, parentFilter) == sourceParents[i]) {
+                final int parent = parentOf(hit.doc, leaves, parentFilter);
+                if (parent == sourceParents[i]) {
                     continue;
                 }
                 // hits are in descending score order, so the neighbor rank is the number of hits kept so far
                 if (kept < VECTOR_POSITIVES) {
                     positives[positiveCount++] = hit.score;
+                    neighbors.computeIfAbsent(sourceParents[i], source -> new HashSet<>()).add(parent);
                 } else if (kept >= VECTOR_HARD_NEGATIVES_FROM) {
                     hardNegatives[hardNegativeCount++] = hit.score;
                 }
